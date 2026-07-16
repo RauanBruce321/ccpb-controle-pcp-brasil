@@ -221,10 +221,7 @@ async function firebasePush(){
     headers:{
         'Content-Type':'application/json'
     },
-    body: JSON.stringify({
-        teste: true,
-        data: new Date().toISOString()
-    })
+    body: JSON.stringify(state)
 });
 
 console.log("Status:", resp.status);;
