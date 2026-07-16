@@ -60,8 +60,77 @@ async function saveLocalState(){const db=await openDb();await new Promise((resol
 function ensureStateShape(target){const base=emptyState();const value=target&&typeof target==='object'?target:base;for(const key of ['users','records','positions','logs','closures','shiftRestarts','releases','archives'])if(!Array.isArray(value[key]))value[key]=base[key];value.config=value.config||base.config;value.config.identity=value.config.identity||base.config.identity;value.config.firebase=value.config.firebase||base.config.firebase;if(!value.config.firebase.databaseURL)value.config.firebase.databaseURL=FIREBASE_DATABASE_URL;if(value.config.firebase.enabled===undefined)value.config.firebase.enabled=true;return value}
 function cleanupExpiredArchives(){if(!Array.isArray(state?.archives))return false;const limit=Date.now()-ARCHIVE_RETENTION_DAYS*24*60*60*1000;const before=state.archives.length;state.archives=state.archives.filter(a=>{const time=Date.parse(a?.at||a?.archivedAt||'');return !Number.isFinite(time)||time>=limit});return state.archives.length!==before}
 async function fetchRemoteState(config){if(!navigator.onLine)return null;const f=config?.firebase||config;if(!f?.enabled||!f.databaseURL)return null;const url=`${String(f.databaseURL).replace(/\/$/,'')}/ccpb/state.json${f.authToken?`?auth=${encodeURIComponent(f.authToken)}`:''}`;const resp=await fetch(url,{cache:'no-store'});if(!resp.ok)throw new Error(`Firebase GET ${resp.status}`);return await resp.json()}
-async function loadState(){let local=null;try{local=await loadLocalState()}catch(e){console.error('Falha ao carregar backup local:',e)}local=ensureStateShape(local||emptyState());try{const remote=await fetchRemoteState(local.config);if(remote){const normalized=ensureStateShape(remote);state=normalized;cleanupExpiredArchives();await saveLocalState();return state}}catch(e){console.error('Firebase indisponível. Usando backup local:',e)}state=local;cleanupExpiredArchives();return state}
-async function saveState(immediate=false){state.updatedAt=Date.now();cleanupExpiredArchives();if(!immediate){clearTimeout(autosaveTimer);autosaveTimer=setTimeout(()=>saveState(true),350);return}try{await firebasePush()}catch(e){console.error('Erro ao sincronizar Firebase:',e)}try{await saveLocalState()}catch(e){console.error('Erro ao salvar backup local:',e)}}
+async function loadState(){
+
+    let local = null;
+
+    try{
+        local = await loadLocalState();
+    }catch(e){
+        console.error('Falha ao carregar backup local:',e);
+    }
+
+    local = ensureStateShape(local || emptyState());
+
+    state = local;
+
+    try{
+        await firebasePull();
+    }catch(e){
+        console.error('Firebase indisponível. Usando backup local:',e);
+    }
+
+    cleanupExpiredArchives();
+
+    return state;
+
+}}catch(e){console.error('Firebase indisponível. Usando backup local:',e)}state=local;cleanupExpiredArchives();return state}
+async function saveState(immediate=false){
+
+    state.updatedAt = Date.now();
+
+    cleanupExpiredArchives();
+
+    if(!immediate){
+
+        clearTimeout(autosaveTimer);
+
+        autosaveTimer = setTimeout(
+            ()=>saveState(true),
+            350
+        );
+
+        return;
+
+    }
+
+    try{
+
+        await saveLocalState();
+
+    }catch(e){
+
+        console.error(
+            'Erro ao salvar backup local:',
+            e
+        );
+
+    }
+
+    try{
+
+        await firebasePush();
+
+    }catch(e){
+
+        console.error(
+            'Erro ao sincronizar Firebase:',
+            e
+        );
+
+    }
+
+}
 function rebuildCache(){cache.records=state.records;cache.byAwb=new Map();cache.byMaster=new Map();cache.byNote=new Map();for(const r of state.records){cache.byAwb.set(norm(r.awb),r);const m=norm(r.master),n=norm(r.note);if(!cache.byMaster.has(m))cache.byMaster.set(m,[]);cache.byMaster.get(m).push(r);if(!cache.byNote.has(n))cache.byNote.set(n,[]);cache.byNote.get(n).push(r)}}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const norm=v=>String(v??'').trim().toUpperCase();
@@ -190,48 +259,125 @@ async function firebasePush(){
 
     const f = state?.config?.firebase;
 
-    if(!f?.enabled){
-        console.error("Firebase desativado.");
-        return false;
+    if(!f?.enabled) return false;
+    if(!f.databaseURL) return false;
+    if(!navigator.onLine) return false;
+
+    const base = String(f.databaseURL).replace(/\/$/,'');
+    const auth = f.authToken ? `?auth=${encodeURIComponent(f.authToken)}` : '';
+
+    async function salvar(path,data){
+
+        const resp = await fetch(
+            `${base}/ccpb/${path}.json${auth}`,
+            {
+                method:'PUT',
+                headers:{
+                    'Content-Type':'application/json'
+                },
+                body:JSON.stringify(data)
+            }
+        );
+
+        if(!resp.ok){
+            throw new Error(`Firebase ${path}: ${resp.status}`);
+        }
+
     }
 
-    if(!f.databaseURL){
-        console.error("DatabaseURL vazia.");
-        return false;
-    }
+    await salvar('version',state.version);
+    await salvar('updatedAt',state.updatedAt);
+    await salvar('config',state.config);
+    await salvar('users',state.users);
+    await salvar('positions',state.positions);
+    await salvar('closures',state.closures);
+    await salvar('shiftRestarts',state.shiftRestarts);
+    await salvar('releases',state.releases);
+    await salvar('archives',state.archives);
 
-    if(!navigator.onLine){
-        console.error("Sem internet.");
-        return false;
-    }
+    // LOGS LIMITADOS
+    await salvar('logs',state.logs.slice(0,1000));
 
-    const url =
-        `${String(f.databaseURL).replace(/\/$/,'')}/ccpb/state.json` +
-        (f.authToken ? `?auth=${encodeURIComponent(f.authToken)}` : '');
-
-    console.log("URL Firebase:", url);
-
-    const resp = await fetch(url,{
-        method:'PUT',
-        headers:{
-            'Content-Type':'application/json'
-        },
-        body: JSON.stringify(state);
-    });
-
-    console.log("Status:", resp.status);
-
-    const texto = await resp.text();
-
-    console.log("Resposta:", texto);
-
-    if(!resp.ok){
-        throw new Error(`Firebase PUT ${resp.status}`);
-    }
+    // REGISTROS
+    await salvar('records',state.records);
 
     return true;
 }
-async function firebasePull(){if(!state)return false;const remote=await fetchRemoteState(state.config);if(!remote)return false;const incoming=ensureStateShape(remote);if(Number(incoming.updatedAt||0)>Number(state.updatedAt||0)){state=incoming;cleanupExpiredArchives();rebuildCache();await saveLocalState();if(session){const freshUser=state.users.find(u=>u.username===session.user.username&&u.active);if(freshUser)session.user=freshUser}if(currentPage)PAGES[currentPage]?.render();return true}return false}
+}
+async function firebasePull(){
+
+    if(!state) return false;
+
+    const f = state?.config?.firebase;
+
+    if(!f?.enabled) return false;
+    if(!f.databaseURL) return false;
+    if(!navigator.onLine) return false;
+
+    const base = String(f.databaseURL).replace(/\/$/,'');
+    const auth = f.authToken ? `?auth=${encodeURIComponent(f.authToken)}` : '';
+
+    async function ler(path){
+
+        const resp = await fetch(`${base}/ccpb/${path}.json${auth}`);
+
+        if(!resp.ok){
+            return null;
+        }
+
+        return await resp.json();
+
+    }
+
+    const remote = {
+        version: await ler('version'),
+        updatedAt: await ler('updatedAt'),
+        config: await ler('config'),
+        users: await ler('users'),
+        records: await ler('records'),
+        positions: await ler('positions'),
+        closures: await ler('closures'),
+        shiftRestarts: await ler('shiftRestarts'),
+        releases: await ler('releases'),
+        archives: await ler('archives'),
+        logs: await ler('logs')
+    };
+
+    if(!remote.updatedAt){
+        return false;
+    }
+
+    if(Number(remote.updatedAt) <= Number(state.updatedAt)){
+        return false;
+    }
+
+    state = ensureStateShape(remote);
+
+    cleanupExpiredArchives();
+
+    rebuildCache();
+
+    await saveLocalState();
+
+    if(session){
+
+        const freshUser = state.users.find(
+            u => u.username === session.user.username && u.active
+        );
+
+        if(freshUser){
+            session.user = freshUser;
+        }
+
+    }
+
+    if(currentPage){
+        PAGES[currentPage]?.render();
+    }
+
+    return true;
+
+}
 async function firebaseTest(){try{const ok=await firebasePush();if(ok)console.log('CCPB sincronizado com Firebase.');return ok}catch(e){console.error(e);return false}}
 
 let inactivityTimer=null;const INACTIVITY_MS=10*60*1000;function resetInactivity(){if(!session)return;clearTimeout(inactivityTimer);inactivityTimer=setTimeout(()=>{if(session){log('LOGOUT',{motivo:'Inatividade de 10 minutos'},'auth');toast('Sessão encerrada por inatividade.','error');logout()}},INACTIVITY_MS)}function startInactivityWatch(){['click','keydown','touchstart','pointerdown','scroll'].forEach(ev=>document.addEventListener(ev,resetInactivity,{passive:true}));resetInactivity()}
