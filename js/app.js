@@ -216,10 +216,18 @@ async function firebasePush(){
         headers:{
             'Content-Type':'application/json'
         },
-        body:JSON.stringify(state)
-    });
+        const resp = await fetch(url,{
+    method:'PUT',
+    headers:{
+        'Content-Type':'application/json'
+    },
+    body: JSON.stringify({
+        teste: true,
+        data: new Date().toISOString()
+    })
+});
 
-    console.log("Status:", resp.status);
+console.log("Status:", resp.status);;
 
     const texto = await resp.text();
 
