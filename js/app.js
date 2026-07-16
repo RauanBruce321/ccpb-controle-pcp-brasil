@@ -222,6 +222,7 @@ async function firebasePush(){
         'Content-Type':'application/json'
     },
     body: JSON.stringify(state)
+
 });
 
 console.log("Status:", resp.status);;
