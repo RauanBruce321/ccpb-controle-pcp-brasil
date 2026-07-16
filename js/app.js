@@ -186,7 +186,51 @@ function closeModal(){$('#modalRoot').innerHTML=''}
 function setTVMode(active){document.body.classList.toggle('tv-mode',active);if(!active){document.body.classList.toggle('single-screen',Boolean(PAGES[currentPage]?.single&&session?.user?.role!=='admin'));if($('#sidebar'))$('#sidebar').classList.remove('open')}}function toggleTV(){const active=!document.body.classList.contains('tv-mode');setTVMode(active);if(active)document.documentElement.requestFullscreen?.().catch(()=>{});else if(document.fullscreenElement)document.exitFullscreen?.()}document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement)setTVMode(false)})
 function globalSearch(){openModal('Busca universal',`<input id="globalSearch" class="scan-input" placeholder="Master, Nota ou AWB" autofocus><div id="globalResults" style="margin-top:15px"></div>`);$('#globalSearch').oninput=e=>{const q=norm(e.target.value);if(!q){$('#globalResults').innerHTML='';return}const r=cache.records.filter(x=>norm(x.awb).includes(q)||norm(x.note).includes(q)||norm(x.master).includes(q)).slice(0,200);$('#globalResults').innerHTML=table(TOWER_COLS,r)}}
 
-async function firebasePush(){const f=state?.config?.firebase;if(!f?.enabled||!f.databaseURL||!navigator.onLine)return false;const url=`${String(f.databaseURL).replace(/\/$/,'')}/ccpb/state.json${f.authToken?`?auth=${encodeURIComponent(f.authToken)}`:''}`;const resp=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)});if(!resp.ok)throw new Error(`Firebase PUT ${resp.status}`);return true}
+async function firebasePush(){
+
+    const f = state?.config?.firebase;
+
+    if(!f?.enabled){
+        console.error("Firebase desativado.");
+        return false;
+    }
+
+    if(!f.databaseURL){
+        console.error("DatabaseURL vazia.");
+        return false;
+    }
+
+    if(!navigator.onLine){
+        console.error("Sem internet.");
+        return false;
+    }
+
+    const url =
+        `${String(f.databaseURL).replace(/\/$/,'')}/ccpb/state.json` +
+        (f.authToken ? `?auth=${encodeURIComponent(f.authToken)}` : '');
+
+    console.log("URL Firebase:", url);
+
+    const resp = await fetch(url,{
+        method:'PUT',
+        headers:{
+            'Content-Type':'application/json'
+        },
+        body:JSON.stringify(state)
+    });
+
+    console.log("Status:", resp.status);
+
+    const texto = await resp.text();
+
+    console.log("Resposta:", texto);
+
+    if(!resp.ok){
+        throw new Error(`Firebase PUT ${resp.status}`);
+    }
+
+    return true;
+}
 async function firebasePull(){if(!state)return false;const remote=await fetchRemoteState(state.config);if(!remote)return false;const incoming=ensureStateShape(remote);if(Number(incoming.updatedAt||0)>Number(state.updatedAt||0)){state=incoming;cleanupExpiredArchives();rebuildCache();await saveLocalState();if(session){const freshUser=state.users.find(u=>u.username===session.user.username&&u.active);if(freshUser)session.user=freshUser}if(currentPage)PAGES[currentPage]?.render();return true}return false}
 async function firebaseTest(){try{const ok=await firebasePush();if(ok)console.log('CCPB sincronizado com Firebase.');return ok}catch(e){console.error(e);return false}}
 
