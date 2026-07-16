@@ -84,7 +84,7 @@ async function loadState(){
 
     return state;
 
-}catch(e){console.error('Firebase indisponível. Usando backup local:',e)}state=local;cleanupExpiredArchives();return state}
+catch(e){console.error('Firebase indisponível. Usando backup local:',e)}state=local;cleanupExpiredArchives();return state}
 async function saveState(immediate=false){
 
     state.updatedAt = Date.now();
