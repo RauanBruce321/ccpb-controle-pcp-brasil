@@ -216,7 +216,7 @@ async function firebasePush(){
         headers:{
             'Content-Type':'application/json'
         },
-        body: JSON.stringify(state)
+        body: JSON.stringify(state);
     });
 
     console.log("Status:", resp.status);
