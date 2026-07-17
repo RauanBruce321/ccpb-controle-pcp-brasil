@@ -390,5 +390,5 @@ async function init(){loginFlows();state=await loadState();if(!state.users?.leng
             }
         })
         .catch(() => {});
-const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},700)}
+}const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},700)}
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
