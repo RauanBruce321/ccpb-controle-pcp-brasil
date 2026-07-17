@@ -75,15 +75,15 @@ async function loadState(){
     state = local;
 
     try{
-        await firebasePull();
-    }catch(e){
-        console.error('Firebase indisponível. Usando backup local:',e);
-    }
+    await firebasePull();
+}catch(e){
+    console.error('Firebase indisponível. Usando backup local:',e);
+}
 
-    cleanupExpiredArchives();
+cleanupExpiredArchives();
 
-    return state;
-   }
+return state;
+}
 
 async function saveState(immediate=false){
 
