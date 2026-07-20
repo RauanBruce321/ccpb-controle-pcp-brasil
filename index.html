@@ -123,14 +123,14 @@ body.dark #loginView input{background:#fff!important;color:#111827!important;bor
   <script>
 'use strict';
 
-const VERSION='4.2';
+const VERSION='4.4';
 const DB_NAME='CCPB_V4_DB';
 const STORE='app';
 const KEY='state';
 const SUPABASE_URL='https://saezanqsbveihdvtavsh.supabase.co';
 const SUPABASE_KEY='sb_publishable_xQHUV3HJwNgQyJspYwOGwg_8ToRx7S2';
-const SUPABASE_TABLE='crc';
-const SUPABASE_STATE_ID='ccpb_principal';
+const SUPABASE_TABLE='ccpb';
+const SUPABASE_STATE_ID='principal';
 const PERMISSIONS=[
   'view.tower','tower.import','tower.list','tower.filters','tower.download','tower.charts','tower.tv','tower.positions',
   'view.receiving','receiving.scan','receiving.list','receiving.filters','receiving.closeShift','receiving.download','receiving.tv',
@@ -394,7 +394,7 @@ async function firebasePull(force=false){
 }
 function startRealtime(){
   initSupabase();if(!supabaseClient||supabaseChannel)return;
-  supabaseChannel=supabaseClient.channel('ccpb-global-sync')
+  supabaseChannel=supabaseClient.channel('ccpb-principal-realtime')
     .on('postgres_changes',{event:'*',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},payload=>{
       const incoming=payload?.new?.dados;if(!incoming||incoming.lastWriter===CLIENT_ID)return;
       state=mergeCloudState(state,incoming);state.users=(state.users||[]).filter(u=>u.role!=='supervisor');rebuildCache();persistLocal().then(()=>{if(currentPage)PAGES[currentPage]?.render()});
