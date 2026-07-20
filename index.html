@@ -117,7 +117,7 @@ const DEFAULT_USERS=[
 ].map(([username,password,name,role])=>({username,password,name,role,active:true,permissions:[...ROLE_PRESETS[role]],requireOperator:role!=='admin'}));
 
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
-let supabaseClient=null,cloudApplying=false,cloudSyncInFlight=false,cloudSyncQueued=false,cloudPullInFlight=false;
+let supabaseClient=null,supabaseChannel=null,cloudApplying=false,cloudSyncInFlight=false,cloudSyncQueued=false,cloudPullInFlight=false;
 let realtimeChannel=null,realtimePullTimer=null,realtimeReconnectTimer=null,realtimeStarted=false,realtimeConnecting=false,lightPollInFlight=false;
 let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0;
 const cloudHashes=new Map();
@@ -357,8 +357,6 @@ function initSupabase(){
  }catch(e){supabaseClient=null;console.error('CCPB: falha ao iniciar Supabase.',e);return null}
 }
 function cloudEnabled(){return true}
-function startSupabaseRealtime(){}
-async function stopSupabaseRealtime(){}
 function scheduleRealtimePull(delay=100){clearTimeout(realtimePullTimer);realtimePullTimer=setTimeout(()=>supabasePull(false),delay)}
 async function checkRemoteStamp(){return supabasePull(false)}
 
