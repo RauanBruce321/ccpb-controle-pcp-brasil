@@ -153,6 +153,9 @@ const DEFAULT_USERS=[
 ].map(([username,password,name,role])=>({username,password,name,role,active:true,permissions:[...ROLE_PRESETS[role]],requireOperator:role!=='admin'}));
 
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
+let syncInProgress=false,syncPending=false,lastRemoteSync=0;
+const CLIENT_ID=sessionStorage.getItem('ccpb_client_id')||crypto.randomUUID();
+sessionStorage.setItem('ccpb_client_id',CLIENT_ID);
 const cache={records:[],byAwb:new Map(),byMaster:new Map(),byNote:new Map()};
 const ROLE_LABELS={admin:'Administrador',tower:'Torre de Controle',leader:'Líder Operacional',supervisor:'Supervisor Operacional',assistant:'Assistente Operacional',triage:'Triagem Operacional',receiving:'Recebimento Operacional'};
 const PERMISSION_LABELS={
@@ -180,7 +183,18 @@ function emptyState(){return{
 };}
 function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE)};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
 async function loadState(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(KEY);r.onsuccess=()=>resolve(r.result||emptyState());r.onerror=()=>reject(r.error)})}
-async function saveState(immediate=false){state.updatedAt=Date.now();if(!immediate){clearTimeout(autosaveTimer);autosaveTimer=setTimeout(()=>saveState(true),350);return}const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(state,KEY);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});firebasePush().catch(()=>{})}
+async function persistLocal(){const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(state,KEY);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
+async function saveState(immediate=false){
+  state.updatedAt=Date.now();
+  state.syncRevision=(Number(state.syncRevision)||0)+1;
+  state.lastWriter=CLIENT_ID;
+  state.syncPending=true;
+  if(!immediate){clearTimeout(autosaveTimer);autosaveTimer=setTimeout(()=>saveState(true),350);return}
+  await persistLocal();
+  const ok=await firebasePush();
+  if(ok){state.syncPending=false;await persistLocal()}else{syncPending=true}
+  return ok
+}
 function rebuildCache(){cache.records=state.records;cache.byAwb=new Map();cache.byMaster=new Map();cache.byNote=new Map();for(const r of state.records){cache.byAwb.set(norm(r.awb),r);const m=norm(r.master),n=norm(r.note);if(!cache.byMaster.has(m))cache.byMaster.set(m,[]);cache.byMaster.get(m).push(r);if(!cache.byNote.has(n))cache.byNote.set(n,[]);cache.byNote.get(n).push(r)}}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const norm=v=>String(v??'').trim().toUpperCase();
@@ -309,11 +323,37 @@ function closeModal(){$('#modalRoot').innerHTML=''}
 function setTVMode(active){document.body.classList.toggle('tv-mode',active);if(!active){document.body.classList.toggle('single-screen',Boolean(PAGES[currentPage]?.single&&session?.user?.role!=='admin'));if($('#sidebar'))$('#sidebar').classList.remove('open')}}function toggleTV(){const active=!document.body.classList.contains('tv-mode');setTVMode(active);if(active)document.documentElement.requestFullscreen?.().catch(()=>{});else if(document.fullscreenElement)document.exitFullscreen?.()}document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement)setTVMode(false)})
 function globalSearch(){openModal('Busca universal',`<input id="globalSearch" class="scan-input" placeholder="Master, Nota ou AWB" autofocus><div id="globalResults" style="margin-top:15px"></div>`);$('#globalSearch').oninput=e=>{const q=norm(e.target.value);if(!q){$('#globalResults').innerHTML='';return}const r=cache.records.filter(x=>norm(x.awb).includes(q)||norm(x.note).includes(q)||norm(x.master).includes(q)).slice(0,200);$('#globalResults').innerHTML=table(TOWER_COLS,r)}}
 
-async function firebasePush(){if(!navigator.onLine||!state)return false;try{const resp=await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?on_conflict=id`,{method:'POST',headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id:SUPABASE_STATE_ID,dados:state,atualizado_em:new Date().toISOString()})});if(!resp.ok)throw new Error(await resp.text());return true}catch(e){console.error('Supabase push:',e);return false}}
-async function firebasePull(){if(!navigator.onLine)return false;try{const resp=await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?id=eq.${encodeURIComponent(SUPABASE_STATE_ID)}&select=dados,atualizado_em`,{headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`}});if(!resp.ok)throw new Error(await resp.text());const rows=await resp.json(),remote=rows?.[0]?.dados;if(remote?.updatedAt>state.updatedAt){state=remote;state.users=(state.users||[]).filter(u=>u.role!=='supervisor');rebuildCache();const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(state,KEY);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});if(currentPage)PAGES[currentPage]?.render()}return true}catch(e){console.error('Supabase pull:',e);return false}}
-async function firebaseTest(){return firebasePush()}
+async function supabaseFetch(url,options={},timeout=15000){const ctl=new AbortController();const timer=setTimeout(()=>ctl.abort(),timeout);try{return await fetch(url,{...options,cache:'no-store',signal:ctl.signal})}finally{clearTimeout(timer)}}
+async function firebasePush(){
+  if(!navigator.onLine||!state)return false;
+  if(syncInProgress){syncPending=true;return false}
+  syncInProgress=true;
+  try{
+    const payload=structuredClone(state);payload.syncPending=false;
+    const resp=await supabaseFetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?on_conflict=id`,{method:'POST',headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates,return=representation'},body:JSON.stringify({id:SUPABASE_STATE_ID,dados:payload,atualizado_em:new Date().toISOString()})});
+    if(!resp.ok)throw new Error(`${resp.status} ${await resp.text()}`);
+    lastRemoteSync=Date.now();syncPending=false;return true
+  }catch(e){console.error('Supabase push:',e);syncPending=true;return false}
+  finally{syncInProgress=false}
+}
+async function firebasePull(force=false){
+  if(!navigator.onLine||!state||syncInProgress)return false;
+  if((state.syncPending||syncPending)&&!force){await firebasePush();if(state.syncPending||syncPending)return false}
+  try{
+    const resp=await supabaseFetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?id=eq.${encodeURIComponent(SUPABASE_STATE_ID)}&select=dados,atualizado_em&t=${Date.now()}`,{headers:{apikey:SUPABASE_KEY,Authorization:`Bearer ${SUPABASE_KEY}`,'Cache-Control':'no-cache'}});
+    if(!resp.ok)throw new Error(`${resp.status} ${await resp.text()}`);
+    const rows=await resp.json(),remote=rows?.[0]?.dados;
+    if(!remote)return true;
+    const remoteRev=Number(remote.syncRevision)||0,localRev=Number(state.syncRevision)||0;
+    const remoteNewer=remoteRev>localRev||(remoteRev===localRev&&Number(remote.updatedAt)>Number(state.updatedAt));
+    if(remoteNewer&&!state.syncPending){state=remote;state.syncPending=false;state.users=(state.users||[]).filter(u=>u.role!=='supervisor');rebuildCache();await persistLocal();if(currentPage)PAGES[currentPage]?.render()}
+    lastRemoteSync=Date.now();return true
+  }catch(e){console.error('Supabase pull:',e);return false}
+}
+async function syncCycle(){if(!navigator.onLine||!state)return;if(state.syncPending||syncPending)await firebasePush();await firebasePull()}
+async function firebaseTest(){const ok=await firebasePush();if(ok)await firebasePull(true);return ok}
 let inactivityTimer=null;const INACTIVITY_MS=10*60*1000;function resetInactivity(){if(!session)return;clearTimeout(inactivityTimer);inactivityTimer=setTimeout(()=>{if(session){log('LOGOUT',{motivo:'Inatividade de 10 minutos'},'auth');toast('Sessão encerrada por inatividade.','error');logout()}},INACTIVITY_MS)}function startInactivityWatch(){['click','keydown','touchstart','pointerdown','scroll'].forEach(ev=>document.addEventListener(ev,resetInactivity,{passive:true}));resetInactivity()}
-async function init(){loginFlows();state=await loadState();if(!state.users?.length)state.users=DEFAULT_USERS;state.users=state.users.filter(u=>u.role!=='supervisor');state.users.forEach(u=>{u.permissions=Array.isArray(u.permissions)?u.permissions:[];if(u.role==='admin')u.permissions=[...PERMISSIONS];if(u.role==='triage'&&!u.permissions.includes('triage.multipleNotesPosition'))u.permissions.push('triage.multipleNotesPosition')});if(!state.records)state.records=[];if(!state.positions)state.positions=[];if(!state.logs)state.logs=[];if(!state.shiftRestarts)state.shiftRestarts=[];if(!state.config)state.config=emptyState().config;rebuildCache();const applyTheme=(t,persist=true)=>{document.body.classList.toggle('dark',t==='dark');if(persist)localStorage.setItem('ccpb_theme',t);$('#themeBtn').textContent=t==='dark'?'☀️':'🌙'};applyTheme('light',false);$('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');$('#loginForm').onsubmit=login;$('#logoutBtn').onclick=logout;$('#menuBtn').onclick=()=>$('#sidebar').classList.toggle('open');$('#globalSearchBtn').onclick=globalSearch;startInactivityWatch();$('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};addEventListener('online',()=>{onlineUpdate();firebasePull().catch(()=>{})});addEventListener('offline',onlineUpdate);onlineUpdate();firebasePull().catch(()=>{});setInterval(()=>{$('#shiftBadge').textContent=shiftOf();firebasePull().catch(()=>{})},3000);if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./service-worker.js').catch(()=>{});const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},700)}
+async function init(){loginFlows();state=await loadState();if(!state.users?.length)state.users=DEFAULT_USERS;state.users=state.users.filter(u=>u.role!=='supervisor');state.users.forEach(u=>{u.permissions=Array.isArray(u.permissions)?u.permissions:[];if(u.role==='admin')u.permissions=[...PERMISSIONS];if(u.role==='triage'&&!u.permissions.includes('triage.multipleNotesPosition'))u.permissions.push('triage.multipleNotesPosition')});if(!state.records)state.records=[];if(!state.positions)state.positions=[];if(!state.logs)state.logs=[];if(!state.shiftRestarts)state.shiftRestarts=[];if(!state.config)state.config=emptyState().config;rebuildCache();const applyTheme=(t,persist=true)=>{document.body.classList.toggle('dark',t==='dark');if(persist)localStorage.setItem('ccpb_theme',t);$('#themeBtn').textContent=t==='dark'?'☀️':'🌙'};applyTheme('light',false);$('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');$('#loginForm').onsubmit=login;$('#logoutBtn').onclick=logout;$('#menuBtn').onclick=()=>$('#sidebar').classList.toggle('open');$('#globalSearchBtn').onclick=globalSearch;startInactivityWatch();$('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};addEventListener('online',()=>{onlineUpdate();syncCycle().catch(()=>{})});addEventListener('offline',onlineUpdate);onlineUpdate();await firebasePull(true);setInterval(()=>{$('#shiftBadge').textContent=shiftOf();syncCycle().catch(()=>{})},2000);if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./service-worker.js').catch(()=>{});const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},700)}
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
 
   </script>
