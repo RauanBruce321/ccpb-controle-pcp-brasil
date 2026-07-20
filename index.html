@@ -77,6 +77,37 @@ body.dark #appView .btn.subtle,body.dark #appView .admin-tabs button{background:
 @media(max-width:1050px){.single-screen .kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}}
 @media(max-width:760px){html{font-size:15px}.single-screen .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.excel-filter{min-width:calc(50% - 4px);max-width:none}.excel-filter-menu{width:min(260px,85vw)}.data-table td{font-size:10px!important}}
 </style>
+
+<script>
+/* CCPB V1.0 - proteção de inicialização independente dos CDNs */
+(function(){
+  'use strict';
+  var released=false;
+  function releaseBoot(){
+    if(released) return;
+    var splash=document.getElementById('splash');
+    var login=document.getElementById('loginView');
+    if(splash) splash.classList.add('hidden');
+    if(login && !document.querySelector('.app-shell:not(.hidden), #appView:not(.hidden)')){
+      login.classList.remove('hidden');
+    }
+    released=true;
+  }
+  window.__CCPB_RELEASE_BOOT__=releaseBoot;
+  window.addEventListener('error', function(ev){
+    console.error('[CCPB] Erro durante a inicialização:', ev.error || ev.message || ev);
+    releaseBoot();
+  });
+  window.addEventListener('unhandledrejection', function(ev){
+    console.error('[CCPB] Falha assíncrona durante a inicialização:', ev.reason || ev);
+    releaseBoot();
+  });
+  document.addEventListener('DOMContentLoaded', function(){
+    setTimeout(releaseBoot, 1800);
+  }, {once:true});
+  setTimeout(releaseBoot, 3500);
+})();
+</script>
 </head>
 <body>
   <div id="splash" class="splash">
@@ -570,7 +601,7 @@ async function init(){
  addEventListener('offline',onlineUpdate);onlineUpdate();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');
  if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
- $('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden');
+ if(window.__CCPB_RELEASE_BOOT__)window.__CCPB_RELEASE_BOOT__();else{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden');}
  // Sincronização inicial em segundo plano, sem travar a tela de entrada.
  if(navigator.onLine){setTimeout(()=>supabasePull(true).catch(e=>console.warn('CCPB: nuvem indisponível; usando cache local.',e)),250)}
  // As ações enviam imediatamente; a consulta periódica serve apenas para outros aparelhos.
@@ -578,7 +609,7 @@ async function init(){
  setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},5000);
  setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
-init().catch(e=>{console.error(e);const splash=document.getElementById('splash');const login=document.getElementById('loginView');if(splash)splash.classList.add('hidden');if(login)login.classList.remove('hidden');setTimeout(()=>alert('Falha ao iniciar alguns recursos do CCPB: '+(e?.message||e)),50)});
+init().catch(e=>{console.error(e);const splash=document.getElementById('splash');const login=document.getElementById('loginView');if(window.__CCPB_RELEASE_BOOT__)window.__CCPB_RELEASE_BOOT__();else{if(splash)splash.classList.add('hidden');if(login)login.classList.remove('hidden');}setTimeout(()=>alert('Falha ao iniciar alguns recursos do CCPB: '+(e?.message||e)),50)});
 // Proteção extra: nenhuma falha externa pode deixar a tela de carregamento presa.
 setTimeout(()=>{const splash=document.getElementById('splash');const login=document.getElementById('loginView');if(splash&&!splash.classList.contains('hidden')){splash.classList.add('hidden');if(login)login.classList.remove('hidden')}},2500);
 
