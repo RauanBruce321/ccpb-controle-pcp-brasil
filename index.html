@@ -123,7 +123,7 @@ body.dark #loginView input{background:#fff!important;color:#111827!important;bor
   <script>
 'use strict';
 
-const VERSION='4.5';
+const VERSION='5.0';
 const DB_NAME='CCPB_V4_DB';
 const STORE='app';
 const KEY='state';
@@ -154,7 +154,7 @@ const DEFAULT_USERS=[
 ].map(([username,password,name,role])=>({username,password,name,role,active:true,permissions:[...ROLE_PRESETS[role]],requireOperator:role!=='admin'}));
 
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
-let syncInProgress=false,syncPending=false,lastRemoteSync=0,supabaseClient=null,supabaseChannel=null;
+let syncInProgress=false,syncPending=false,lastRemoteSync=0,supabaseClient=null,supabaseChannel=null,cloudReady=false;
 const CLIENT_ID=sessionStorage.getItem('ccpb_client_id')||crypto.randomUUID();
 sessionStorage.setItem('ccpb_client_id',CLIENT_ID);
 const cache={records:[],byAwb:new Map(),byMaster:new Map(),byNote:new Map()};
@@ -360,11 +360,52 @@ function normalizeCloudState(raw){
   });
   return merged;
 }
+function stateStamp(x){return Number(x?.updatedAt)||Date.parse(x?.updatedAt||'')||0}
+function entityStamp(x,fallback=0){
+  return Date.parse(x?.updatedAt||x?.releasedAt||x?.triagedAt||x?.receivedAt||x?.usedAt||x?.expiresAt||x?.createdAt||x?.at||'')||fallback||0;
+}
+function entityKey(item,type){
+  if(!item)return'';
+  if(type==='records')return norm(item.awb);
+  if(type==='users')return String(item.username||'').trim().toLowerCase();
+  if(type==='positions')return norm(item.code);
+  if(type==='closures')return item.id||`${item.shiftKey||''}|${item.sector||''}`;
+  if(type==='shiftRestarts')return item.id||`${item.shiftKey||''}|${item.sector||''}`;
+  if(type==='releases')return item.id||`${item.note||''}|${item.code||''}`;
+  return item.id||'';
+}
+function mergeEntityArrays(local=[],remote=[],type,localFallback=0,remoteFallback=0){
+  const map=new Map();
+  const add=(item,fallback)=>{
+    const key=entityKey(item,type);if(!key)return;
+    const old=map.get(key);
+    if(!old){map.set(key,structuredClone(item));return}
+    if(entityStamp(item,fallback)>=entityStamp(old.value,old.fallback))map.set(key,{value:{...old.value,...structuredClone(item)},fallback});
+  };
+  for(const item of remote||[])map.set(entityKey(item,type),{value:structuredClone(item),fallback:remoteFallback});
+  for(const item of local||[])add(item,localFallback);
+  return [...map.values()].map(x=>x?.value||x).filter(Boolean);
+}
+function mergeStates(local,remote){
+  local=normalizeCloudState(local||{});remote=normalizeCloudState(remote||{});
+  const lt=stateStamp(local),rt=stateStamp(remote),base=rt>lt?remote:local;
+  const merged={...base};
+  for(const k of ['users','records','positions','logs','closures','shiftRestarts','releases','archives']){
+    merged[k]=mergeEntityArrays(local[k],remote[k],k,lt,rt);
+  }
+  merged.config=rt>lt
+    ? {...local.config,...remote.config,identity:{...local.config?.identity,...remote.config?.identity},firebase:{...local.config?.firebase,...remote.config?.firebase},sector:{...local.config?.sector,...remote.config?.sector}}
+    : {...remote.config,...local.config,identity:{...remote.config?.identity,...local.config?.identity},firebase:{...remote.config?.firebase,...local.config?.firebase},sector:{...remote.config?.sector,...local.config?.sector}};
+  merged.version=VERSION;
+  merged.updatedAt=Math.max(lt,rt,Date.now());
+  merged.syncRevision=Math.max(Number(local.syncRevision||0),Number(remote.syncRevision||0))+1;
+  merged.syncPending=false;
+  return normalizeCloudState(merged);
+}
 async function applyRemoteState(incoming,render=true){
   if(!incoming||typeof incoming!=='object')return false;
-  state=normalizeCloudState(incoming);
-  state.syncPending=false;
-  syncPending=false;
+  state=mergeStates(state||emptyState(),incoming);
+  state.syncPending=false;syncPending=false;cloudReady=true;
   rebuildCache();
   await persistLocal();
   if(session?.user?.username){
@@ -377,32 +418,31 @@ async function applyRemoteState(incoming,render=true){
 async function firebasePush(){
   if(!navigator.onLine||!state)return false;
   initSupabase();if(!supabaseClient)return false;
-  if(syncInProgress){syncPending=true;return false}
+  if(syncInProgress){syncPending=true;return true}
   syncInProgress=true;
   try{
-    state.updatedAt=Date.now();
-    state.lastWriter=CLIENT_ID;
-    const payload=structuredClone(state);
-    payload.syncPending=false;
+    const {data:remoteRow,error:readError}=await supabaseClient.from(SUPABASE_TABLE)
+      .select('dados').eq('id',SUPABASE_STATE_ID).maybeSingle();
+    if(readError)throw readError;
+    if(remoteRow?.dados&&Object.keys(remoteRow.dados).length)state=mergeStates(state,remoteRow.dados);
+    state.updatedAt=Date.now();state.lastWriter=CLIENT_ID;
+    const payload=structuredClone(state);payload.syncPending=false;
+    const sentAt=new Date().toISOString();
     const {data,error}=await supabaseClient.from(SUPABASE_TABLE)
-      .upsert({id:SUPABASE_STATE_ID,dados:payload,atualizado_em:new Date().toISOString()},{onConflict:'id'})
-      .select('atualizado_em')
-      .single();
+      .upsert({id:SUPABASE_STATE_ID,dados:payload,atualizado_em:sentAt},{onConflict:'id'})
+      .select('atualizado_em').single();
     if(error)throw error;
-    state.syncPending=false;
-    syncPending=false;
-    lastRemoteSync=Date.parse(data?.atualizado_em||'')||Date.now();
-    await persistLocal();
+    state=normalizeCloudState(payload);state.syncPending=false;
+    syncPending=false;cloudReady=true;
+    lastRemoteSync=Date.parse(data?.atualizado_em||sentAt)||Date.now();
+    rebuildCache();await persistLocal();
     return true;
   }catch(e){
-    console.error('CCPB Supabase push:',e);
-    state.syncPending=true;
-    syncPending=true;
-    await persistLocal().catch(()=>{});
-    return false;
+    console.error('CCPB Supabase push:',e);state.syncPending=true;syncPending=true;
+    await persistLocal().catch(()=>{});return false;
   }finally{
     syncInProgress=false;
-    if(syncPending&&navigator.onLine)setTimeout(()=>firebasePush().catch(()=>{}),800);
+    if(syncPending&&navigator.onLine)setTimeout(()=>firebasePush().catch(()=>{}),500);
   }
 }
 async function firebasePull(force=false){
@@ -410,23 +450,14 @@ async function firebasePull(force=false){
   initSupabase();if(!supabaseClient)return false;
   try{
     const {data,error}=await supabaseClient.from(SUPABASE_TABLE)
-      .select('dados,atualizado_em')
-      .eq('id',SUPABASE_STATE_ID)
-      .maybeSingle();
+      .select('dados,atualizado_em').eq('id',SUPABASE_STATE_ID).maybeSingle();
     if(error)throw error;
-    if(!data){
-      state=normalizeCloudState(state||emptyState());
-      return await firebasePush();
+    if(data?.dados&&Object.keys(data.dados).length){
+      await applyRemoteState(data.dados,true);
+      lastRemoteSync=Date.parse(data.atualizado_em||'')||Date.now();
+      return true;
     }
-    if(!data.dados||Object.keys(data.dados).length===0){
-      state=normalizeCloudState(state||emptyState());
-      return await firebasePush();
-    }
-    const remoteTime=Date.parse(data.atualizado_em||'')||Number(data.dados.updatedAt)||0;
-    const localPending=Boolean(state?.syncPending||syncPending);
-    if(localPending&&!force&&Number(state?.updatedAt||0)>remoteTime)return await firebasePush();
-    await applyRemoteState(data.dados,true);
-    lastRemoteSync=remoteTime||Date.now();
+    if(!cloudReady){cloudReady=true;return await firebasePush()}
     return true;
   }catch(e){console.error('CCPB Supabase pull:',e);return false}
 }
@@ -434,27 +465,16 @@ function startRealtime(){
   initSupabase();if(!supabaseClient)return;
   if(supabaseChannel){supabaseClient.removeChannel(supabaseChannel);supabaseChannel=null}
   supabaseChannel=supabaseClient.channel(`ccpb-principal-${CLIENT_ID}`)
-    .on('postgres_changes',{event:'UPDATE',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},async payload=>{
+    .on('postgres_changes',{event:'*',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},async payload=>{
       const incoming=payload?.new?.dados;
       if(!incoming||incoming.lastWriter===CLIENT_ID)return;
-      await applyRemoteState(incoming,true);
-      lastRemoteSync=Date.now();
+      await applyRemoteState(incoming,true);lastRemoteSync=Date.now();
     })
-    .on('postgres_changes',{event:'INSERT',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},async payload=>{
-      const incoming=payload?.new?.dados;
-      if(!incoming||incoming.lastWriter===CLIENT_ID)return;
-      await applyRemoteState(incoming,true);
-      lastRemoteSync=Date.now();
-    })
-    .subscribe(status=>{
-      console.log('CCPB Realtime:',status);
-      if(status==='SUBSCRIBED')firebasePull(true).catch(()=>{});
-    });
+    .subscribe(status=>{console.log('CCPB Realtime:',status);if(status==='SUBSCRIBED')firebasePull(true).catch(()=>{})});
 }
 async function syncCycle(){
   if(!navigator.onLine||!state)return;
-  if(state.syncPending||syncPending)await firebasePush();
-  else await firebasePull(false);
+  if(state.syncPending||syncPending)await firebasePush();else await firebasePull(false);
 }
 async function firebaseTest(){
   initSupabase();
@@ -482,7 +502,7 @@ async function init(){
   onlineUpdate();
   await firebasePull(true);
   startRealtime();
-  setInterval(()=>{$('#shiftBadge').textContent=shiftOf();syncCycle().catch(()=>{})},8000);
+  setInterval(()=>{$('#shiftBadge').textContent=shiftOf();syncCycle().catch(()=>{})},5000);
   if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
   const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');
   if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
