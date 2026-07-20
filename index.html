@@ -123,7 +123,7 @@ body.dark #loginView input{background:#fff!important;color:#111827!important;bor
   <script>
 'use strict';
 
-const VERSION='4.4';
+const VERSION='4.5';
 const DB_NAME='CCPB_V4_DB';
 const STORE='app';
 const KEY='state';
@@ -186,15 +186,21 @@ function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(D
 async function loadState(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(KEY);r.onsuccess=()=>resolve(r.result||emptyState());r.onerror=()=>reject(r.error)})}
 async function persistLocal(){const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(state,KEY);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
 async function saveState(immediate=false){
+  if(!state)return false;
   state.updatedAt=Date.now();
   state.syncRevision=(Number(state.syncRevision)||0)+1;
   state.lastWriter=CLIENT_ID;
   state.syncPending=true;
-  if(!immediate){clearTimeout(autosaveTimer);autosaveTimer=setTimeout(()=>saveState(true),350);return}
   await persistLocal();
+  if(!immediate){
+    clearTimeout(autosaveTimer);
+    autosaveTimer=setTimeout(()=>firebasePush().catch(()=>{}),250);
+    return true;
+  }
+  clearTimeout(autosaveTimer);
   const ok=await firebasePush();
-  if(ok){state.syncPending=false;await persistLocal()}else{syncPending=true}
-  return ok
+  if(!ok)syncPending=true;
+  return ok;
 }
 function rebuildCache(){cache.records=state.records;cache.byAwb=new Map();cache.byMaster=new Map();cache.byNote=new Map();for(const r of state.records){cache.byAwb.set(norm(r.awb),r);const m=norm(r.master),n=norm(r.note);if(!cache.byMaster.has(m))cache.byMaster.set(m,[]);cache.byMaster.get(m).push(r);if(!cache.byNote.has(n))cache.byNote.set(n,[]);cache.byNote.get(n).push(r)}}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -327,36 +333,46 @@ function globalSearch(){openModal('Busca universal',`<input id="globalSearch" cl
 function initSupabase(){
   try{
     if(!window.supabase)throw new Error('Biblioteca Supabase não carregou.');
-    if(!supabaseClient)supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:false,autoRefreshToken:false},realtime:{params:{eventsPerSecond:10}}});
+    if(!supabaseClient)supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
+      auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+      realtime:{params:{eventsPerSecond:20}}
+    });
     return supabaseClient;
   }catch(e){console.error('CCPB: falha ao iniciar Supabase.',e);return null}
 }
-function stateTime(x){return Number(x?.updatedAt)||Date.parse(x?.updatedAt||0)||0}
-function mergeByKey(local=[],remote=[],keyFn){
-  const map=new Map();
-  for(const item of remote||[]){const k=keyFn(item);if(k)map.set(k,item)}
-  for(const item of local||[]){const k=keyFn(item);if(!k)continue;const old=map.get(k);const nt=stateTime(item),ot=stateTime(old);if(!old||nt>=ot)map.set(k,{...(old||{}),...item})}
-  return [...map.values()];
+function normalizeCloudState(raw){
+  const base=emptyState(),x=(raw&&typeof raw==='object')?structuredClone(raw):{};
+  const merged={...base,...x};
+  merged.users=Array.isArray(x.users)&&x.users.length?x.users:base.users;
+  merged.records=Array.isArray(x.records)?x.records:[];
+  merged.positions=Array.isArray(x.positions)?x.positions:[];
+  merged.logs=Array.isArray(x.logs)?x.logs:[];
+  merged.closures=Array.isArray(x.closures)?x.closures:[];
+  merged.shiftRestarts=Array.isArray(x.shiftRestarts)?x.shiftRestarts:[];
+  merged.releases=Array.isArray(x.releases)?x.releases:[];
+  merged.archives=Array.isArray(x.archives)?x.archives:[];
+  merged.config={...base.config,...(x.config||{}),identity:{...base.config.identity,...(x.config?.identity||{})},firebase:{...base.config.firebase,...(x.config?.firebase||{})},sector:{...(x.config?.sector||{})}};
+  merged.users=merged.users.filter(u=>u.role!=='supervisor');
+  merged.users.forEach(u=>{
+    u.permissions=Array.isArray(u.permissions)?u.permissions:[];
+    if(u.role==='admin')u.permissions=[...PERMISSIONS];
+    if(u.role==='triage'&&!u.permissions.includes('triage.multipleNotesPosition'))u.permissions.push('triage.multipleNotesPosition');
+  });
+  return merged;
 }
-function mergeCloudState(local,remote){
-  if(!remote)return local;
-  if(!local)return remote;
-  const lr=Number(local.syncRevision)||0,rr=Number(remote.syncRevision)||0;
-  const lt=stateTime(local),rt=stateTime(remote);
-  const base=(rr>lr||(rr===lr&&rt>lt))?structuredClone(remote):structuredClone(local);
-  base.users=mergeByKey(local.users,remote.users,x=>String(x?.username||''));
-  base.records=mergeByKey(local.records,remote.records,x=>norm(x?.awb));
-  base.positions=mergeByKey(local.positions,remote.positions,x=>norm(x?.code));
-  base.logs=mergeByKey(local.logs,remote.logs,x=>String(x?.id||`${x?.at||x?.date||''}|${x?.action||''}|${x?.operator||''}`));
-  base.closures=mergeByKey(local.closures,remote.closures,x=>String(x?.id||`${x?.shiftKey||''}|${x?.sector||''}`));
-  base.shiftRestarts=mergeByKey(local.shiftRestarts,remote.shiftRestarts,x=>String(x?.id||`${x?.shiftKey||''}|${x?.sector||''}`));
-  base.releases=mergeByKey(local.releases,remote.releases,x=>String(x?.id||x?.code||''));
-  base.archives=mergeByKey(local.archives,remote.archives,x=>String(x?.id||x?.createdAt||''));
-  base.config={...(remote.config||{}),...(local.config||{})};
-  base.syncRevision=Math.max(lr,rr);
-  base.updatedAt=Math.max(lt,rt,Date.now());
-  base.syncPending=false;
-  return base;
+async function applyRemoteState(incoming,render=true){
+  if(!incoming||typeof incoming!=='object')return false;
+  state=normalizeCloudState(incoming);
+  state.syncPending=false;
+  syncPending=false;
+  rebuildCache();
+  await persistLocal();
+  if(session?.user?.username){
+    const refreshed=state.users.find(u=>u.username===session.user.username&&u.active);
+    if(refreshed)session.user=refreshed;
+  }
+  if(render&&currentPage)PAGES[currentPage]?.render();
+  return true;
 }
 async function firebasePush(){
   if(!navigator.onLine||!state)return false;
@@ -364,46 +380,114 @@ async function firebasePush(){
   if(syncInProgress){syncPending=true;return false}
   syncInProgress=true;
   try{
-    const {data:remoteRow,error:readError}=await supabaseClient.from(SUPABASE_TABLE).select('dados').eq('id',SUPABASE_STATE_ID).maybeSingle();
-    if(readError)throw readError;
-    if(remoteRow?.dados)state=mergeCloudState(state,remoteRow.dados);
-    state.syncRevision=(Number(state.syncRevision)||0)+1;
     state.updatedAt=Date.now();
     state.lastWriter=CLIENT_ID;
-    const payload=structuredClone(state);payload.syncPending=false;
-    const {error}=await supabaseClient.from(SUPABASE_TABLE).upsert({id:SUPABASE_STATE_ID,dados:payload,atualizado_em:new Date().toISOString()},{onConflict:'id'});
+    const payload=structuredClone(state);
+    payload.syncPending=false;
+    const {data,error}=await supabaseClient.from(SUPABASE_TABLE)
+      .upsert({id:SUPABASE_STATE_ID,dados:payload,atualizado_em:new Date().toISOString()},{onConflict:'id'})
+      .select('atualizado_em')
+      .single();
     if(error)throw error;
-    state.syncPending=false;syncPending=false;lastRemoteSync=Date.now();await persistLocal();return true;
-  }catch(e){console.error('CCPB Supabase push:',e);state.syncPending=true;syncPending=true;return false}
-  finally{syncInProgress=false;if(syncPending)setTimeout(()=>syncCycle().catch(()=>{}),250)}
+    state.syncPending=false;
+    syncPending=false;
+    lastRemoteSync=Date.parse(data?.atualizado_em||'')||Date.now();
+    await persistLocal();
+    return true;
+  }catch(e){
+    console.error('CCPB Supabase push:',e);
+    state.syncPending=true;
+    syncPending=true;
+    await persistLocal().catch(()=>{});
+    return false;
+  }finally{
+    syncInProgress=false;
+    if(syncPending&&navigator.onLine)setTimeout(()=>firebasePush().catch(()=>{}),800);
+  }
 }
 async function firebasePull(force=false){
-  if(!navigator.onLine||!state)return false;
+  if(!navigator.onLine)return false;
   initSupabase();if(!supabaseClient)return false;
-  if(syncInProgress&&!force)return false;
   try{
-    const {data,error}=await supabaseClient.from(SUPABASE_TABLE).select('dados,atualizado_em').eq('id',SUPABASE_STATE_ID).maybeSingle();
+    const {data,error}=await supabaseClient.from(SUPABASE_TABLE)
+      .select('dados,atualizado_em')
+      .eq('id',SUPABASE_STATE_ID)
+      .maybeSingle();
     if(error)throw error;
-    if(!data?.dados){if(force||state.records?.length)return await firebasePush();return true}
-    const merged=mergeCloudState(state,data.dados);
-    const changed=JSON.stringify(merged)!==JSON.stringify(state);
-    state=merged;state.users=(state.users||[]).filter(u=>u.role!=='supervisor');rebuildCache();await persistLocal();
-    if(changed&&currentPage)PAGES[currentPage]?.render();
-    lastRemoteSync=Date.now();return true;
+    if(!data){
+      state=normalizeCloudState(state||emptyState());
+      return await firebasePush();
+    }
+    if(!data.dados||Object.keys(data.dados).length===0){
+      state=normalizeCloudState(state||emptyState());
+      return await firebasePush();
+    }
+    const remoteTime=Date.parse(data.atualizado_em||'')||Number(data.dados.updatedAt)||0;
+    const localPending=Boolean(state?.syncPending||syncPending);
+    if(localPending&&!force&&Number(state?.updatedAt||0)>remoteTime)return await firebasePush();
+    await applyRemoteState(data.dados,true);
+    lastRemoteSync=remoteTime||Date.now();
+    return true;
   }catch(e){console.error('CCPB Supabase pull:',e);return false}
 }
 function startRealtime(){
-  initSupabase();if(!supabaseClient||supabaseChannel)return;
-  supabaseChannel=supabaseClient.channel('ccpb-principal-realtime')
-    .on('postgres_changes',{event:'*',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},payload=>{
-      const incoming=payload?.new?.dados;if(!incoming||incoming.lastWriter===CLIENT_ID)return;
-      state=mergeCloudState(state,incoming);state.users=(state.users||[]).filter(u=>u.role!=='supervisor');rebuildCache();persistLocal().then(()=>{if(currentPage)PAGES[currentPage]?.render()});
-    }).subscribe(status=>console.log('CCPB Realtime:',status));
+  initSupabase();if(!supabaseClient)return;
+  if(supabaseChannel){supabaseClient.removeChannel(supabaseChannel);supabaseChannel=null}
+  supabaseChannel=supabaseClient.channel(`ccpb-principal-${CLIENT_ID}`)
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},async payload=>{
+      const incoming=payload?.new?.dados;
+      if(!incoming||incoming.lastWriter===CLIENT_ID)return;
+      await applyRemoteState(incoming,true);
+      lastRemoteSync=Date.now();
+    })
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:SUPABASE_TABLE,filter:`id=eq.${SUPABASE_STATE_ID}`},async payload=>{
+      const incoming=payload?.new?.dados;
+      if(!incoming||incoming.lastWriter===CLIENT_ID)return;
+      await applyRemoteState(incoming,true);
+      lastRemoteSync=Date.now();
+    })
+    .subscribe(status=>{
+      console.log('CCPB Realtime:',status);
+      if(status==='SUBSCRIBED')firebasePull(true).catch(()=>{});
+    });
 }
-async function syncCycle(){if(!navigator.onLine||!state)return;if(state.syncPending||syncPending)await firebasePush();else await firebasePull()}
-async function firebaseTest(){initSupabase();const ok=await firebasePush();if(ok){await firebasePull(true);startRealtime()}return ok}
+async function syncCycle(){
+  if(!navigator.onLine||!state)return;
+  if(state.syncPending||syncPending)await firebasePush();
+  else await firebasePull(false);
+}
+async function firebaseTest(){
+  initSupabase();
+  const read=await firebasePull(true);
+  if(!read)return false;
+  startRealtime();
+  return true;
+}
 let inactivityTimer=null;const INACTIVITY_MS=10*60*1000;function resetInactivity(){if(!session)return;clearTimeout(inactivityTimer);inactivityTimer=setTimeout(()=>{if(session){log('LOGOUT',{motivo:'Inatividade de 10 minutos'},'auth');toast('Sessão encerrada por inatividade.','error');logout()}},INACTIVITY_MS)}function startInactivityWatch(){['click','keydown','touchstart','pointerdown','scroll'].forEach(ev=>document.addEventListener(ev,resetInactivity,{passive:true}));resetInactivity()}
-async function init(){loginFlows();state=await loadState();if(!state.users?.length)state.users=DEFAULT_USERS;state.users=state.users.filter(u=>u.role!=='supervisor');state.users.forEach(u=>{u.permissions=Array.isArray(u.permissions)?u.permissions:[];if(u.role==='admin')u.permissions=[...PERMISSIONS];if(u.role==='triage'&&!u.permissions.includes('triage.multipleNotesPosition'))u.permissions.push('triage.multipleNotesPosition')});if(!state.records)state.records=[];if(!state.positions)state.positions=[];if(!state.logs)state.logs=[];if(!state.shiftRestarts)state.shiftRestarts=[];if(!state.config)state.config=emptyState().config;rebuildCache();const applyTheme=(t,persist=true)=>{document.body.classList.toggle('dark',t==='dark');if(persist)localStorage.setItem('ccpb_theme',t);$('#themeBtn').textContent=t==='dark'?'☀️':'🌙'};applyTheme('light',false);$('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');$('#loginForm').onsubmit=login;$('#logoutBtn').onclick=logout;$('#menuBtn').onclick=()=>$('#sidebar').classList.toggle('open');$('#globalSearchBtn').onclick=globalSearch;startInactivityWatch();$('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};addEventListener('online',()=>{onlineUpdate();syncCycle().catch(()=>{})});addEventListener('offline',onlineUpdate);onlineUpdate();await firebasePull(true);startRealtime();setInterval(()=>{$('#shiftBadge').textContent=shiftOf();syncCycle().catch(()=>{})},5000);if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./service-worker.js').catch(()=>{});const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},700)}
+async function init(){
+  loginFlows();
+  state=normalizeCloudState(await loadState());
+  rebuildCache();
+  const applyTheme=(t,persist=true)=>{document.body.classList.toggle('dark',t==='dark');if(persist)localStorage.setItem('ccpb_theme',t);$('#themeBtn').textContent=t==='dark'?'☀️':'🌙'};
+  applyTheme('light',false);
+  $('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');
+  $('#loginForm').onsubmit=login;
+  $('#logoutBtn').onclick=logout;
+  $('#menuBtn').onclick=()=>$('#sidebar').classList.toggle('open');
+  $('#globalSearchBtn').onclick=globalSearch;
+  startInactivityWatch();
+  $('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};
+  addEventListener('online',()=>{onlineUpdate();firebasePull(true).then(()=>startRealtime()).catch(()=>{})});
+  addEventListener('offline',onlineUpdate);
+  onlineUpdate();
+  await firebasePull(true);
+  startRealtime();
+  setInterval(()=>{$('#shiftBadge').textContent=shiftOf();syncCycle().catch(()=>{})},8000);
+  if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./service-worker.js').catch(()=>{});
+  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');
+  if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
+  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},700);
+}
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
 
   </script>
