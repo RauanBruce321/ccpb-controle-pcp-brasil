@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111f46">
   <meta name="description" content="CCPB - Controle de PCP Brasil">
-  <title>CCPB - Controle de PCP Brasil | Versão 6.3</title>
+  <title>CCPB - Controle de PCP Brasil | Versão 6.4</title>
   <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22CCPB%20-%20Controle%20de%20PCP%20Brasil%22%2C%22short_name%22%3A%22CCPB%22%2C%22start_url%22%3A%22./%22%2C%22scope%22%3A%22./%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b1638%22%2C%22theme_color%22%3A%22%23111f46%22%2C%22lang%22%3A%22pt-BR%22%7D">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -162,7 +162,7 @@ body.dark .excel-filter-menu input,body.dark .excel-filter-menu button,body.dark
   <script>
 'use strict';
 
-const VERSION='6.3';
+const VERSION='6.4';
 const SUPABASE_URL='https://saezanqsbveihdvtavsh.supabase.co';
 const SUPABASE_KEY='sb_publishable_xQHUV3HJwNgQyJspYwOGwg_8ToRx7S2';
 const SUPABASE_TABLE='ccpb';
@@ -279,9 +279,14 @@ const dateBR=v=>{if(!v)return'';if(typeof v==='number'){const d=new Date(Math.ro
 const isoDate=v=>{if(!v)return'';if(typeof v==='number'){const d=new Date(Math.round((v-25569)*86400*1000));return d.toISOString().slice(0,10)}const s=String(v).trim();if(/^\d+(\.\d+)?$/.test(s))return isoDate(Number(s));const m=s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);if(m)return`${m[3]}-${m[2]}-${m[1]}`;const d=new Date(s);return isNaN(d)?'':d.toISOString().slice(0,10)};
 function shiftOf(d=new Date()){const h=d.getHours();return h>=6&&h<18?'Turno 1':'Turno 2'}
 function shiftKey(d=new Date()){const day=new Date(d);if(d.getHours()<6)day.setDate(day.getDate()-1);return`${day.toISOString().slice(0,10)}|${shiftOf(d)}`}
-function toast(msg,type='info'){const el=document.createElement('div');el.className=`toast ${type==='ok'?'ok':type==='error'?'error':''}`;el.textContent=msg;$('#toastRoot').appendChild(el);setTimeout(()=>el.remove(),3500)}
+function toast(msg,type='info'){const el=document.createElement('div');el.className=`toast ${type==='ok'?'ok':type==='error'?'error':''}`;el.textContent=msg;$('#toastRoot').appendChild(el);setTimeout(()=>el.remove(),4500)}
+const LIVE_ACTIONS=new Set(['RECEBEU_MASTER','BIPOU_AWB','CADASTROU_POSICAO','ENVIOU_BOLSAO','MOVEU_BOLSAO','SOLICITOU_RETIRADA','LIBEROU_NOTA','RETIROU_NOTA','ENCERROU_TURNO','INICIOU_TURNO','ARQUIVOU_TURNO','LIMPOU_TURNO','LIMPOU_SISTEMA','SALVOU_USUARIO','SALVOU_POSICAO','IMPORTOU_DADOS']);
+let pendingLiveEvents=[];const receivedLiveEventIds=new Set();
+function liveMessage(evt){const d=evt?.detail||{},op=evt?.operator||'Operação';switch(evt?.action){case'RECEBEU_MASTER':return`${op} recebeu a Master ${d.master||''} (${d.awbs||0} AWBs).`;case'BIPOU_AWB':return`${op} triou a AWB ${d.awb||''} da Nota ${d.note||''}.`;case'CADASTROU_POSICAO':return`${op} cadastrou a Nota ${d.note||''} na posição ${d.position||''}.`;case'ENVIOU_BOLSAO':case'MOVEU_BOLSAO':return`Nota ${d.note||''} enviada ao Bolsão por ${op}.`;case'SOLICITOU_RETIRADA':return`Retirada solicitada para a Nota ${d.note||''}.`;case'LIBEROU_NOTA':case'RETIROU_NOTA':return`Nota ${d.note||''} retirada/liberada por ${op}.`;case'ENCERROU_TURNO':return`${op} encerrou o turno de ${d.sector||evt.moduleName||'operação'}.`;case'INICIOU_TURNO':return`${op} iniciou o turno de ${d.sector||evt.moduleName||'operação'}.`;case'ARQUIVOU_TURNO':case'LIMPOU_TURNO':return`${op} arquivou/limpou o turno.`;case'LIMPOU_SISTEMA':return`${op} zerou os dados operacionais do sistema.`;case'SALVOU_USUARIO':return`Cadastro de usuário atualizado por ${op}.`;case'SALVOU_POSICAO':return`Posição ${d.code||''} cadastrada/atualizada por ${op}.`;case'IMPORTOU_DADOS':return`${op} importou novos dados para a operação.`;default:return`${op}: ${evt?.actionName||evt?.action||'nova atualização'}.`}}
+function showLiveEvent(evt){if(!evt?.id||receivedLiveEventIds.has(evt.id)||evt.clientId===CLIENT_ID)return;receivedLiveEventIds.add(evt.id);if(receivedLiveEventIds.size>500){const first=receivedLiveEventIds.values().next().value;receivedLiveEventIds.delete(first)}toast(liveMessage(evt),'ok');try{if(navigator.vibrate)navigator.vibrate([80,40,80])}catch(_){}}
+async function broadcastLiveEvent(evt){if(!evt)return;evt.clientId=CLIENT_ID;evt.sentAt=Date.now();try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-action',payload:evt})}catch(e){console.warn('CCPB: falha no aviso em tempo real.',e)}try{localStorage.setItem('ccpb_live_event',JSON.stringify(evt));localStorage.removeItem('ccpb_live_event')}catch(_){}}
 function has(p){return session?.user?.permissions?.includes(p)||session?.user?.role==='admin'}
-function log(action,detail={},module=currentPage||'system'){state.logs.unshift({id:crypto.randomUUID(),at:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR'),time:new Date().toLocaleTimeString('pt-BR'),username:session?.user?.username||'sistema',operator:session?.operator||session?.user?.name||'Sistema',role:roleLabel(session?.user?.role)||'Sistema',module,moduleName:moduleLabel(module),action,actionName:actionLabel(action),detail,detailText:'',device:deviceLabel()});state.logs[0].detailText=detailText(state.logs[0]);if(state.logs.length>30000)state.logs.length=30000;saveState()}
+function log(action,detail={},module=currentPage||'system'){const entry={id:crypto.randomUUID(),at:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR'),time:new Date().toLocaleTimeString('pt-BR'),username:session?.user?.username||'sistema',operator:session?.operator||session?.user?.name||'Sistema',role:roleLabel(session?.user?.role)||'Sistema',module,moduleName:moduleLabel(module),action,actionName:actionLabel(action),detail,detailText:'',device:deviceLabel()};entry.detailText=detailText(entry);state.logs.unshift(entry);if(LIVE_ACTIONS.has(action))pendingLiveEvents.push(safeClone(entry));if(state.logs.length>30000)state.logs.length=30000;saveState()}
 function statusOfNote(rows){const total=rows.length,received=rows.filter(r=>r.receivedAt).length,triaged=rows.filter(r=>r.triagedAt).length,released=rows.filter(r=>r.releasedAt).length,inBolsao=rows.some(r=>r.inBolsao&&!r.releasedAt);if(released===total&&total)return'Retirada';if(inBolsao&&triaged<total)return'No Bolsão';if(triaged===total&&total)return'Aguardando Assistente';if(triaged)return received<total?'Aguardando complemento':'Em triagem';if(received===total&&total)return'Aguardando triagem';if(received)return'Parcialmente recebida';return'A caminho'}
 function noteSummary(note,rows=cache.byNote.get(norm(note))||[]){const masters=uniq(rows.map(r=>r.master)),bases=uniq(rows.map(r=>r.base)),fcs=uniq(rows.map(r=>r.fc));const total=rows.length,received=rows.filter(r=>r.receivedAt).length,triaged=rows.filter(r=>r.triagedAt).length,released=rows.filter(r=>r.releasedAt).length;const promises=rows.map(r=>r.promiseDate).filter(Boolean).sort();return{note:rows[0]?.note||note,masters,bases,fcs,total,received,triaged,released,missingReceipt:total-received,missingTriage:total-triaged,position:rows.find(r=>r.inBolsao&&!r.releasedAt)?'BOLSÃO':(rows.find(r=>r.position)?.position||''),promiseDate:promises[0]||'',status:statusOfNote(rows),pct:total?Math.round(triaged/total*100):0}}
 function allNotes(){return[...cache.byNote.entries()].map(([n,rows])=>noteSummary(n,rows))}
@@ -354,9 +359,9 @@ function startTriage(value){const awb=norm(value),r=cache.byAwb.get(awb);if(!r){
 async function confirmTriageBolsao(r){if(!r.triagedAt){r.triagedAt=new Date().toISOString();r.triagedBy=session.operator;r.triagedUser=session.user.username;r.triagedShift=shiftKey();r.status='BOLSAO';log('BIPOU_AWB',{awb:r.awb,note:r.note,master:r.master,position:'BOLSÃO'},'triage');await saveState(true)}const ns=noteSummary(r.note);$('#triageResult').innerHTML=`<div class="bolsao-banner">NO BOLSÃO</div><h3>AWB recebida no Bolsão</h3><p>Nota: <b>${r.note}</b> | Posição original: <b>${r.originalPosition||'-'}</b> | Progresso: <b>${ns.triaged}/${ns.total}</b></p>`;toast('AWB identificada no Bolsão.','ok');resetTriageScan();setTimeout(()=>$('#awbScan')?.focus(),250)}
 function openPositionAssign(r){openModal('Cadastrar posição',`<p>A Nota <b>${r.note}</b> ainda não possui posição.</p><div class="form-grid"><label>Nota<input value="${r.note}" disabled></label><label>Posição<input id="newPosition" autofocus></label></div><div style="margin-top:14px;display:flex;gap:8px"><button class="btn primary" id="assignPosBtn">Cadastrar posição</button><button class="btn subtle" id="cancelAssignPos">Cancelar</button></div>`);$('#assignPosBtn').onclick=()=>assignPosition(r,$('#newPosition').value);$('#cancelAssignPos').onclick=()=>{closeModal();resetTriageScan()};$('#modalClose').onclick=()=>{closeModal();resetTriageScan()}}
 async function assignPosition(r,code){code=norm(code);if(!code){toast('Informe a posição.','error');return}let p=state.positions.find(x=>norm(x.code)===code);if(!p){p={code,active:true,createdAt:new Date().toISOString(),createdBy:session.operator};state.positions.push(p)}const occupied=allNotes().find(n=>norm(n.position)===code&&n.note!==r.note&&n.status!=='Retirada');if(occupied&&!has('triage.multipleNotesPosition')){toast(`Posição ocupada pela Nota ${occupied.note}.`,'error');return}(cache.byNote.get(norm(r.note))||[]).forEach(x=>x.position=code);log('CADASTROU_POSICAO',{note:r.note,position:code},'triage');await saveState(true);closeModal();askPositionConfirm(r,code)}
-function askPositionConfirm(r,position){$('#triageResult').innerHTML=`<h3>Nota ${r.note}</h3><p>Posição correta: <b>${position}</b></p><p>${noteSummary(r.note).triaged} de ${noteSummary(r.note).total} AWBs triadas.</p><input id="positionConfirm" class="scan-input" placeholder="BIPE A POSIÇÃO ${position}" autofocus><button id="cancelTriageStep" class="btn subtle" style="margin-top:10px">Cancelar leitura</button>`;$('#positionConfirm').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();confirmTriage(r,e.target.value,position)}};$('#cancelTriageStep').onclick=resetTriageScan}
+function askPositionConfirm(r,position){$('#triageResult').innerHTML=`<h3>Nota ${r.note}</h3><p>Posição correta: <b>${position}</b></p><p>${noteSummary(r.note).triaged} de ${noteSummary(r.note).total} AWBs triadas.</p><input id="positionConfirm" class="scan-input" inputmode="text" autocomplete="off" placeholder="BIPE OU DIGITE A POSIÇÃO ${position}" autofocus><button id="cancelTriageStep" class="btn subtle" style="margin-top:10px">Cancelar leitura</button>`;const field=$('#positionConfirm');field.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();confirmTriage(r,e.target.value,position)}};$('#cancelTriageStep').onclick=resetTriageScan;requestAnimationFrame(()=>setTimeout(()=>{field.scrollIntoView({behavior:'smooth',block:'center'});field.focus({preventScroll:true});try{field.select()}catch(_){}},40))}
 async function confirmTriage(r,code,expected){if(norm(code)!==norm(expected)){toast(`Posição incorreta. Esperada: ${expected}`,'error');$('#positionConfirm').select();return}if(!r.triagedAt){r.triagedAt=new Date().toISOString();r.triagedBy=session.operator;r.triagedUser=session.user.username;r.triagedShift=shiftKey();r.status='TRIAGED';log('BIPOU_AWB',{awb:r.awb,note:r.note,master:r.master,position:expected},'triage');await saveState(true)}const ns=noteSummary(r.note);$('#triageResult').innerHTML=`<h3>AWB armazenada com sucesso</h3><p>Nota: <b>${r.note}</b> | Posição: <b>${expected}</b> | Progresso: <b>${ns.triaged}/${ns.total}</b></p>`;if(ns.triaged===ns.total){toast('Nota completa. Solicite a liberação ao Assistente.','ok');$('#removeBtn').classList.remove('hidden');$('#removeBtn').dataset.note=r.note}resetTriageScan();setTimeout(()=>$('#awbScan')?.focus(),250)}
-function resetTriageScan(){const f=$('#awbScan');if(f){f.readOnly=false;f.classList.remove('locked-scan');f.value=''}triagePending=null}
+function resetTriageScan(){const f=$('#awbScan');if(f){f.readOnly=false;f.classList.remove('locked-scan');f.value=''}triagePending=null;if(pendingVisualRefresh)setTimeout(refreshCurrentViewPreservingState,120)}
 function promptReleaseCode(){const note=$('#removeBtn').dataset.note;if(!note)return;openModal('Retirar Nota',`<p>Informe ou bipa o código gerado pelo Assistente para a Nota <b>${note}</b>.</p><input id="releaseInput" class="scan-input" autofocus><button id="releaseConfirm" class="btn success" style="margin-top:12px">Confirmar retirada</button>`);$('#releaseConfirm').onclick=()=>releaseNote(note,$('#releaseInput').value)}
 async function releaseNote(note,code){const rel=state.releases.find(x=>x.note===note&&x.code===norm(code)&&!x.usedAt&&new Date(x.expiresAt)>new Date());if(!rel){toast('Código inválido ou expirado.','error');return}const rows=cache.byNote.get(norm(note))||[];if(rows.some(r=>!r.triagedAt)){toast('A Nota ainda possui AWBs pendentes.','error');return}const ts=new Date().toISOString();rows.forEach(r=>{r.releasedAt=ts;r.releasedBy=session.operator;r.releasedUser=session.user.username;r.status='RELEASED'});rel.usedAt=ts;rel.usedBy=session.operator;log('RETIROU_NOTA',{note,position:rows[0]?.position,code},'triage');await saveState(true);closeModal();toast('Nota retirada e posição liberada.','ok');renderTriage()}
 
@@ -506,7 +511,7 @@ function restoreViewState(v){
   if(v.activeKey){const el=document.getElementById(v.activeKey)||document.querySelector(`[name="${CSS.escape(v.activeKey)}"]`);if(el){el.focus({preventScroll:true});const saved=(v.controls||[]).find(x=>x.key===v.activeKey);if(saved&&saved.start!==null&&el.setSelectionRange)try{el.setSelectionRange(saved.start,saved.end)}catch(_){}}}
  });
 }
-function canRefreshCurrentView(){return !hasOpenModal()&&!hasOpenFilter()}
+function canRefreshCurrentView(){if(currentPage==='triage'&&triagePending)return false;return !hasOpenModal()&&!hasOpenFilter()}
 let pendingVisualRefresh=false;
 function refreshCurrentViewPreservingState(){
  if(!session||!currentPage)return;
@@ -650,6 +655,8 @@ async function supabasePush(silent=false){
   state.config=state.config||emptyState().config;
   state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:now};
   await persistLocalState();
+  if(pendingLiveEvents.length){const events=pendingLiveEvents.splice(0);for(const evt of events)await broadcastLiveEvent(evt)}
+  try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-sync',payload:{clientId:CLIENT_ID,at:Date.now()}})}catch(_){ }
   if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');
   return true;
  }catch(e){localChangesPending=true;console.error('CCPB V6: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
@@ -680,10 +687,12 @@ async function supabasePull(force=false){
 }
 function startSupabaseRealtime(){
  const client=initSupabase();if(!client||supabaseChannel)return;
- supabaseChannel=client.channel('ccpb-v13-realtime-'+CLIENT_ID)
+ supabaseChannel=client.channel('ccpb-v14-live',{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
+  .on('broadcast',{event:'ccpb-sync'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(0)})
+  .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload);scheduleRealtimePull(0)})
   .on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE},payload=>{
    const id=String(payload?.new?.id||payload?.old?.id||'');
-   if(id.startsWith(CLOUD_PREFIX))scheduleRealtimePull(60);
+   if(id.startsWith(CLOUD_PREFIX))scheduleRealtimePull(0);
   })
   .subscribe(status=>{
    if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);scheduleRealtimePull(0)}
@@ -728,10 +737,10 @@ async function init(){
  if($('#installAppBtn'))$('#installAppBtn').onclick=async()=>{if(!deferredInstallPrompt){toast('Use o menu do navegador e escolha Instalar aplicativo ou Adicionar à tela inicial.');return}deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('#installAppBtn').classList.add('hidden')};
  addEventListener('appinstalled',()=>{$('#installAppBtn')?.classList.add('hidden');toast('CCPB instalado com sucesso.','ok')});
  $('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};
- addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else supabasePull(true)});addEventListener('offline',onlineUpdate);onlineUpdate();startSupabaseRealtime();
+ addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else supabasePull(true)});addEventListener('offline',onlineUpdate);addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt);scheduleRealtimePull(0)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
- setInterval(()=>{if(navigator.onLine&&!cloudSyncInFlight&&!cloudPullInFlight)supabasePull(false)},750);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},750);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},400);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
+ setInterval(()=>{if(navigator.onLine&&!cloudSyncInFlight&&!cloudPullInFlight&&!localChangesPending)supabasePull(false)},900);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},500);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},400);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
 
