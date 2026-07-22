@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111f46">
   <meta name="description" content="CCPB - Controle de PCP Brasil">
-  <title>CCPB - Controle de PCP Brasil | Versão 6.2</title>
+  <title>CCPB - Controle de PCP Brasil | Versão 6.3</title>
   <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22CCPB%20-%20Controle%20de%20PCP%20Brasil%22%2C%22short_name%22%3A%22CCPB%22%2C%22start_url%22%3A%22./%22%2C%22scope%22%3A%22./%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b1638%22%2C%22theme_color%22%3A%22%23111f46%22%2C%22lang%22%3A%22pt-BR%22%7D">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -162,7 +162,7 @@ body.dark .excel-filter-menu input,body.dark .excel-filter-menu button,body.dark
   <script>
 'use strict';
 
-const VERSION='6.2';
+const VERSION='6.3';
 const SUPABASE_URL='https://saezanqsbveihdvtavsh.supabase.co';
 const SUPABASE_KEY='sb_publishable_xQHUV3HJwNgQyJspYwOGwg_8ToRx7S2';
 const SUPABASE_TABLE='ccpb';
@@ -506,12 +506,20 @@ function restoreViewState(v){
   if(v.activeKey){const el=document.getElementById(v.activeKey)||document.querySelector(`[name="${CSS.escape(v.activeKey)}"]`);if(el){el.focus({preventScroll:true});const saved=(v.controls||[]).find(x=>x.key===v.activeKey);if(saved&&saved.start!==null&&el.setSelectionRange)try{el.setSelectionRange(saved.start,saved.end)}catch(_){}}}
  });
 }
-function canRefreshCurrentView(){return !hasOpenModal()&&!hasOpenFilter()&&!hasActiveFilter()&&!isEditingUI()}
+function canRefreshCurrentView(){return !hasOpenModal()&&!hasOpenFilter()}
+let pendingVisualRefresh=false;
+function refreshCurrentViewPreservingState(){
+ if(!session||!currentPage)return;
+ if(!canRefreshCurrentView()){pendingVisualRefresh=true;return}
+ pendingVisualRefresh=false;
+ const viewState=captureViewState();
+ requestAnimationFrame(()=>{PAGES[currentPage]?.render();restoreViewState(viewState)});
+}
 
-function scheduleRealtimePull(delay=100){
+function scheduleRealtimePull(delay=80){
  clearTimeout(realtimePullTimer);
  realtimePullTimer=setTimeout(()=>{
-  if(isEditingUI()||cloudSyncInFlight||cloudPullInFlight){scheduleRealtimePull(700);return}
+  if(cloudSyncInFlight||cloudPullInFlight){scheduleRealtimePull(180);return}
   supabasePull(false);
  },delay);
 }
@@ -649,7 +657,6 @@ async function supabasePush(silent=false){
 }
 async function supabasePull(force=false){
  if(!cloudEnabled()||!navigator.onLine)return false;
- if(!force&&isEditingUI())return true;
  if(cloudPullInFlight||cloudSyncInFlight)return true;
  if(localChangesPending&&!force)return true;
  const client=initSupabase();if(!client)return false;
@@ -666,20 +673,25 @@ async function supabasePull(force=false){
   remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:new Date().toISOString()};
   cloudApplying=true;state=localChangesPending?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();localChangesPending=false;rebuildCache();await persistLocalState();
   if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}
-  if(session&&currentPage&&canRefreshCurrentView()){
-   const viewState=captureViewState();
-   requestAnimationFrame(()=>{PAGES[currentPage]?.render();restoreViewState(viewState)});
-  }
+  refreshCurrentViewPreservingState();
   return true;
  }catch(e){console.error('CCPB V6: falha ao carregar Supabase.',e);return false}
  finally{cloudApplying=false;cloudPullInFlight=false}
 }
 function startSupabaseRealtime(){
  const client=initSupabase();if(!client||supabaseChannel)return;
- supabaseChannel=client.channel('ccpb-v12-realtime').on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE},payload=>{
-  const id=String(payload?.new?.id||payload?.old?.id||'');
-  if(id.startsWith(CLOUD_PREFIX)&&!cloudSyncInFlight)scheduleRealtimePull(250);
- }).subscribe();
+ supabaseChannel=client.channel('ccpb-v13-realtime-'+CLIENT_ID)
+  .on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE},payload=>{
+   const id=String(payload?.new?.id||payload?.old?.id||'');
+   if(id.startsWith(CLOUD_PREFIX))scheduleRealtimePull(60);
+  })
+  .subscribe(status=>{
+   if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);scheduleRealtimePull(0)}
+   if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+    clearTimeout(realtimeReconnectTimer);
+    realtimeReconnectTimer=setTimeout(async()=>{await stopSupabaseRealtime();startSupabaseRealtime()},1200);
+   }
+  });
 }
 async function stopSupabaseRealtime(){if(supabaseChannel&&supabaseClient){try{await supabaseClient.removeChannel(supabaseChannel)}catch(e){}}supabaseChannel=null}
 async function supabaseTest(){const pulled=await supabasePull(true);if(!pulled)return false;return await supabasePush(true)}
@@ -710,7 +722,7 @@ async function init(){
  $('#sidebar').addEventListener('click',e=>{if(innerWidth<=1024&&e.target.closest('button'))setMobileMenu(false)});
  addEventListener('resize',()=>{if(innerWidth>1024)setMobileMenu(false)});
  $('#globalSearchBtn').onclick=globalSearch;startInactivityWatch();
- document.addEventListener('click',e=>{if(e.target.closest('button'))scheduleActionSync(900)});
+ document.addEventListener('click',e=>{if(e.target.closest('button')){scheduleActionSync(80);setTimeout(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},250)}});
  let deferredInstallPrompt=null;
  addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;$('#installAppBtn')?.classList.remove('hidden')});
  if($('#installAppBtn'))$('#installAppBtn').onclick=async()=>{if(!deferredInstallPrompt){toast('Use o menu do navegador e escolha Instalar aplicativo ou Adicionar à tela inicial.');return}deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('#installAppBtn').classList.add('hidden')};
@@ -719,7 +731,7 @@ async function init(){
  addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else supabasePull(true)});addEventListener('offline',onlineUpdate);onlineUpdate();startSupabaseRealtime();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
- setInterval(()=>{if(!isEditingUI()&&!cloudSyncInFlight&&!cloudPullInFlight)supabasePull(false)},1500);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},1500);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
+ setInterval(()=>{if(navigator.onLine&&!cloudSyncInFlight&&!cloudPullInFlight)supabasePull(false)},750);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},750);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},400);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
 
