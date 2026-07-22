@@ -241,8 +241,24 @@ function emptyState(){return{
   config:{identity:{name:'CCPB - Controle de PCP Brasil',subtitle:'Fluxo operacional integrado das Bases a TZX'},supabase:{enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:SUPABASE_TABLE,rowId:SUPABASE_ROW_ID,lastSync:null},sector:{},requireOperatorDefault:true}
 };}
 function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>{const db=r.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE)};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
-async function loadState(){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(KEY);r.onsuccess=()=>resolve(r.result||emptyState());r.onerror=()=>reject(r.error)})}
-async function persistLocalState(){const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(state,KEY);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
+async function loadState(){
+ try{
+  const db=await openDb();
+  return await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readonly');const r=tx.objectStore(STORE).get(KEY);r.onsuccess=()=>resolve(r.result||emptyState());r.onerror=()=>reject(r.error)});
+ }catch(e){
+  console.warn('CCPB: armazenamento local indisponível; iniciando diretamente pela nuvem.',e);
+  try{const cached=localStorage.getItem('ccpb_state_fallback');return cached?JSON.parse(cached):emptyState()}catch(_){return emptyState()}
+ }
+}
+async function persistLocalState(){
+ try{
+  const db=await openDb();
+  await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(state,KEY);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});
+ }catch(e){
+  console.warn('CCPB: IndexedDB indisponível; usando cache temporário do navegador.',e);
+  try{localStorage.setItem('ccpb_state_fallback',JSON.stringify(state))}catch(_){}
+ }
+}
 async function saveState(immediate=false){
  if(!cloudApplying){
   state.updatedAt=Date.now();
@@ -472,7 +488,11 @@ function mergeCloudState(local,remote){
 function initSupabase(){
  try{
   if(!window.supabase?.createClient)throw new Error('Biblioteca Supabase não foi carregada.');
-  if(!supabaseClient)supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
+  if(!supabaseClient)supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
+   auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false},
+   realtime:{params:{eventsPerSecond:20}},
+   global:{headers:{'x-client-info':'ccpb-web-v6.4'}}
+  });
   return supabaseClient;
  }catch(e){supabaseClient=null;console.error('CCPB: falha ao iniciar Supabase.',e);return null}
 }
@@ -525,7 +545,7 @@ function scheduleRealtimePull(delay=80){
  clearTimeout(realtimePullTimer);
  realtimePullTimer=setTimeout(()=>{
   if(cloudSyncInFlight||cloudPullInFlight){scheduleRealtimePull(180);return}
-  supabasePull(false);
+  supabasePull(true);
  },delay);
 }
 let actionSyncTimer=null;
@@ -687,7 +707,7 @@ async function supabasePull(force=false){
 }
 function startSupabaseRealtime(){
  const client=initSupabase();if(!client||supabaseChannel)return;
- supabaseChannel=client.channel('ccpb-v14-live',{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
+ supabaseChannel=client.channel(`ccpb-v14-live-${CLIENT_ID}`,{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
   .on('broadcast',{event:'ccpb-sync'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(0)})
   .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload);scheduleRealtimePull(0)})
   .on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE},payload=>{
@@ -737,7 +757,10 @@ async function init(){
  if($('#installAppBtn'))$('#installAppBtn').onclick=async()=>{if(!deferredInstallPrompt){toast('Use o menu do navegador e escolha Instalar aplicativo ou Adicionar à tela inicial.');return}deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('#installAppBtn').classList.add('hidden')};
  addEventListener('appinstalled',()=>{$('#installAppBtn')?.classList.add('hidden');toast('CCPB instalado com sucesso.','ok')});
  $('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};
- addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else supabasePull(true)});addEventListener('offline',onlineUpdate);addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt);scheduleRealtimePull(0)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
+ addEventListener('online',()=>{onlineUpdate();stopSupabaseRealtime().finally(()=>startSupabaseRealtime());if(localChangesPending)queueSupabasePush(0);scheduleRealtimePull(0)});addEventListener('offline',onlineUpdate);addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt);scheduleRealtimePull(0)}catch(_){}}});
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&navigator.onLine){if(!supabaseChannel)startSupabaseRealtime();scheduleRealtimePull(0)}});
+ addEventListener('focus',()=>{if(navigator.onLine){if(!supabaseChannel)startSupabaseRealtime();scheduleRealtimePull(0)}});
+ onlineUpdate();startSupabaseRealtime();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
  setInterval(()=>{if(navigator.onLine&&!cloudSyncInFlight&&!cloudPullInFlight&&!localChangesPending)supabasePull(false)},900);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},500);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},400);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
