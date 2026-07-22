@@ -199,8 +199,8 @@ const DEFAULT_USERS=[
 
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
 let supabaseClient=null,supabaseChannel=null,cloudApplying=false,cloudSyncInFlight=false,cloudSyncQueued=false,cloudPullInFlight=false;
-let realtimeChannel=null,realtimePullTimer=null,realtimeReconnectTimer=null,realtimeStarted=false,realtimeConnecting=false,lightPollInFlight=false;
-let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0,localRevision=0,postPushPullNeeded=false;
+let realtimeChannel=null,realtimePullTimer=null,realtimeReconnectTimer=null,realtimeStarted=false,realtimeConnecting=false,lightPollInFlight=false,realtimePullAgain=false;
+let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0;
 const cloudHashes=new Map();
 const CLIENT_ID=(crypto.randomUUID?.()||Math.random().toString(36).slice(2));
 const cache={records:[],byAwb:new Map(),byMaster:new Map(),byNote:new Map()};
@@ -263,7 +263,6 @@ async function saveState(immediate=false){
  if(!cloudApplying){
   state.updatedAt=Date.now();
   localChangesPending=true;
-  localRevision++;
  }
  if(!immediate){
   clearTimeout(autosaveTimer);
@@ -356,7 +355,7 @@ function drawTowerCharts(bases,recs){destroyChart('towerBase');charts.towerBase=
 function destroyChart(k){try{charts[k]?.destroy()}catch{}delete charts[k]}
 
 async function importTower(file){if(!file)return;$('#importPanel')?.classList.remove('hidden');setImportProgress(2,'Lendo arquivo...');try{const data=await file.arrayBuffer();const wb=XLSX.read(data,{type:'array',cellDates:false});const ws=wb.Sheets[wb.SheetNames[0]];const raw=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true});if(!raw.length)throw new Error('Arquivo sem linhas.');const mapped=[];let invalid=0;const existing=new Set(cache.records.map(r=>norm(r.awb)));const seen=new Set();for(let i=0;i<raw.length;i++){const x=normalizeRow(raw[i]);if(!x.master||!x.note||!x.awb||!x.fc||!x.base){invalid++;continue}if(existing.has(norm(x.awb))||seen.has(norm(x.awb)))continue;seen.add(norm(x.awb));mapped.push({...x,id:crypto.randomUUID(),status:'PENDING_RECEIPT',createdAt:new Date().toISOString(),createdBy:session.operator,createdUser:session.user.username,shift:shiftKey()});if(i%3000===0){setImportProgress(Math.min(35,5+i/raw.length*30),`Validando ${i.toLocaleString('pt-BR')} de ${raw.length.toLocaleString('pt-BR')}...`);await idle()}}
- const duplicates=raw.length-invalid-mapped.length;$('#importValidation').innerHTML=`Linhas encontradas: <b>${raw.length.toLocaleString('pt-BR')}</b> &nbsp; Válidas novas: <b>${mapped.length.toLocaleString('pt-BR')}</b> &nbsp; Duplicadas: <b>${duplicates.toLocaleString('pt-BR')}</b> &nbsp; Inválidas: <b>${invalid.toLocaleString('pt-BR')}</b>`;if(!mapped.length){setImportProgress(100,'Nenhuma linha nova para inserir.');toast('Nenhuma AWB nova foi encontrada.','error');return}for(let i=0;i<mapped.length;i+=1500){state.records.push(...mapped.slice(i,i+1500));setImportProgress(35+Math.round((i+1500)/mapped.length*60),`Gravando ${Math.min(i+1500,mapped.length).toLocaleString('pt-BR')} de ${mapped.length.toLocaleString('pt-BR')}...`);await idle()}rebuildCache();await saveState(true);setImportProgress(97,'Sincronizando a quantidade completa com todas as telas...');const synced=await supabasePush(true);if(!synced)throw new Error('Não foi possível concluir a sincronização com o Supabase. Os dados ficaram salvos neste aparelho para nova tentativa.');await supabasePull(true);setImportProgress(100,`${mapped.length.toLocaleString('pt-BR')} AWBs acrescentadas e sincronizadas.`);log('IMPORTOU_ARQUIVO',{file:file.name,found:raw.length,inserted:mapped.length,duplicates,invalid},'tower');toast(`${mapped.length.toLocaleString('pt-BR')} AWBs importadas em todas as telas.`,'ok');setTimeout(renderTower,250)}catch(err){console.error(err);setImportProgress(100,`Falha: ${err.message}`);toast(`Falha ao importar: ${err.message}`,'error')}}
+ const duplicates=raw.length-invalid-mapped.length;$('#importValidation').innerHTML=`Linhas encontradas: <b>${raw.length.toLocaleString('pt-BR')}</b> &nbsp; Válidas novas: <b>${mapped.length.toLocaleString('pt-BR')}</b> &nbsp; Duplicadas: <b>${duplicates.toLocaleString('pt-BR')}</b> &nbsp; Inválidas: <b>${invalid.toLocaleString('pt-BR')}</b>`;if(!mapped.length){setImportProgress(100,'Nenhuma linha nova para inserir.');toast('Nenhuma AWB nova foi encontrada.','error');return}for(let i=0;i<mapped.length;i+=1500){state.records.push(...mapped.slice(i,i+1500));setImportProgress(35+Math.round((i+1500)/mapped.length*60),`Gravando ${Math.min(i+1500,mapped.length).toLocaleString('pt-BR')} de ${mapped.length.toLocaleString('pt-BR')}...`);await idle()}rebuildCache();await saveState(true);setImportProgress(100,`${mapped.length.toLocaleString('pt-BR')} AWBs acrescentadas com sucesso.`);log('IMPORTOU_ARQUIVO',{file:file.name,found:raw.length,inserted:mapped.length,duplicates,invalid},'tower');toast(`${mapped.length.toLocaleString('pt-BR')} AWBs importadas.`,'ok');setTimeout(renderTower,700)}catch(err){console.error(err);setImportProgress(100,`Falha: ${err.message}`);toast(`Falha ao importar: ${err.message}`,'error')}}
 function normalizeRow(row){const obj={};for(const[k,v]of Object.entries(row)){const nk=String(k).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');obj[nk]=v}return{master:String(obj.master||'').trim(),note:String(obj.nota||obj.note||'').trim(),awb:String(obj.awb||'').trim(),fc:String(obj.fc||'').trim(),promiseDate:isoDate(obj.datapromessa||obj.promessa||obj.vencimento),base:String(obj.basedeorigem||obj.baseorigem||obj.base||'').trim()}}
 function setImportProgress(p,t){if($('#importBar'))$('#importBar').style.width=`${Math.min(100,p)}%`;if($('#importText'))$('#importText').textContent=t}
 const idle=()=>new Promise(r=>setTimeout(r,0));
@@ -542,12 +541,12 @@ function refreshCurrentViewPreservingState(){
  requestAnimationFrame(()=>{PAGES[currentPage]?.render();restoreViewState(viewState)});
 }
 
-function scheduleRealtimePull(delay=350){
+function scheduleRealtimePull(delay=220){
  clearTimeout(realtimePullTimer);
- realtimePullTimer=setTimeout(async()=>{
-  if(cloudSyncInFlight||cloudPullInFlight||localChangesPending){scheduleRealtimePull(350);return}
-  await supabasePull(true);
- },Math.max(80,delay));
+ realtimePullTimer=setTimeout(()=>{
+  if(cloudSyncInFlight||cloudPullInFlight){realtimePullAgain=true;return}
+  supabasePull(true);
+ },Math.max(100,delay));
 }
 let actionSyncTimer=null;
 function scheduleActionSync(delay=900){
@@ -648,14 +647,11 @@ async function supabasePush(silent=false){
  const client=initSupabase();if(!client)return false;
  if(cloudSyncInFlight){cloudSyncQueued=true;return true}
  cloudSyncInFlight=true;
- const pushRevision=localRevision;
- const snapshot=safeClone(state);
- let ok=false;
  try{
   await migrateLegacyIfNeeded(client);
   let changed=0;
   for(const group of CLOUD_GROUPS){
-   const localRows=tableRows(group,snapshot);
+   const localRows=tableRows(group,state);
    const remoteRows=await fetchTable(client,group);
    const remoteById=new Map(remoteRows.map(r=>[String(r.id),r]));
    const localIds=new Set(localRows.map(r=>String(r.id)));
@@ -664,6 +660,8 @@ async function supabasePush(silent=false){
     const remote=remoteById.get(String(row.id));
     if(!remote||fastHash(remote.dados)!==fastHash(row.dados))writes.push(row);
    }
+   // Exclui somente itens que este aparelho já conhecia e que foram removidos
+   // conscientemente nele. Itens criados por outro aparelho nunca são apagados por engano.
    const previouslyKnown=knownCloudIds.get(group)||new Set();
    const deletes=[...previouslyKnown].filter(id=>!localIds.has(id));
    if(writes.length){await upsertChunks(client,writes);changed+=writes.length}
@@ -673,38 +671,20 @@ async function supabasePush(silent=false){
    for(const row of writes)finalMap.set(String(row.id),row);
    rememberGroup(group,[...finalMap.values()]);
   }
-  const now=new Date().toISOString();lastSuccessfulPushAt=Date.now();
-  if(localRevision===pushRevision){
-   localChangesPending=false;
-   state.updatedAt=Date.now();
-   state.config=state.config||emptyState().config;
-   state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:now};
-   await persistLocalState();
-  }else{
-   localChangesPending=true;
-   cloudSyncQueued=true;
-  }
+  const now=new Date().toISOString();state.updatedAt=Date.now();localChangesPending=false;lastSuccessfulPushAt=Date.now();
+  state.config=state.config||emptyState().config;
+  state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:now};
+  await persistLocalState();
   if(pendingLiveEvents.length){const events=pendingLiveEvents.splice(0);for(const evt of events)await broadcastLiveEvent(evt)}
   try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-sync',payload:{clientId:CLIENT_ID,at:Date.now()}})}catch(_){ }
-  postPushPullNeeded=!localChangesPending;
   if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');
-  ok=true;return true;
+  return true;
  }catch(e){localChangesPending=true;console.error('CCPB V6: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
- finally{
-  cloudSyncInFlight=false;
-  if(cloudSyncQueued){
-   cloudSyncQueued=false;
-   clearTimeout(queueSupabasePush.timer);
-   queueSupabasePush.timer=setTimeout(()=>supabasePush(true),250);
-  }else if(ok&&postPushPullNeeded){
-   postPushPullNeeded=false;
-   scheduleRealtimePull(120);
-  }
- }
+ finally{cloudSyncInFlight=false;if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),500)}}
 }
 async function supabasePull(force=false){
  if(!cloudEnabled()||!navigator.onLine)return false;
- if(cloudPullInFlight||cloudSyncInFlight)return true;
+ if(cloudPullInFlight||cloudSyncInFlight){realtimePullAgain=true;return true;}
  if(localChangesPending&&!force)return true;
  const client=initSupabase();if(!client)return false;
  cloudPullInFlight=true;
@@ -718,24 +698,24 @@ async function supabasePull(force=false){
   }
   remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;
   remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:new Date().toISOString()};
-  cloudApplying=true;state=remote;cloudApplying=false;normalizeSystemUsers();localChangesPending=false;rebuildCache();await persistLocalState();
+  cloudApplying=true;state=localChangesPending?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();localChangesPending=false;rebuildCache();await persistLocalState();
   if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}
   refreshCurrentViewPreservingState();
   return true;
  }catch(e){console.error('CCPB V6: falha ao carregar Supabase.',e);return false}
- finally{cloudApplying=false;cloudPullInFlight=false}
+ finally{cloudApplying=false;cloudPullInFlight=false;if(realtimePullAgain){realtimePullAgain=false;scheduleRealtimePull(250)}}
 }
 function startSupabaseRealtime(){
  const client=initSupabase();if(!client||supabaseChannel)return;
  supabaseChannel=client.channel(`ccpb-v14-live-${CLIENT_ID}`,{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
-  .on('broadcast',{event:'ccpb-sync'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(120)})
-  .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload);scheduleRealtimePull(180)})
+  .on('broadcast',{event:'ccpb-sync'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(180)})
+  .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload);scheduleRealtimePull(250)})
   .on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE},payload=>{
    const id=String(payload?.new?.id||payload?.old?.id||'');
-   if(id.startsWith(CLOUD_PREFIX))scheduleRealtimePull(450);
+   if(id.startsWith(CLOUD_PREFIX))scheduleRealtimePull(650);
   })
   .subscribe(status=>{
-   if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);scheduleRealtimePull(120)}
+   if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);scheduleRealtimePull(250)}
    if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
     clearTimeout(realtimeReconnectTimer);
     realtimeReconnectTimer=setTimeout(async()=>{await stopSupabaseRealtime();startSupabaseRealtime()},1200);
@@ -756,7 +736,7 @@ async function init(){
  delete state.config.firebase;rebuildCache();
  const applyTheme=(t,persist=true)=>{document.body.classList.toggle('dark',t==='dark');if(persist)localStorage.setItem('ccpb_theme',t);if($('#themeBtn'))$('#themeBtn').textContent=t==='dark'?'☀️':'🌙'};
  applyTheme(localStorage.getItem('ccpb_theme')||'light',false);if($('#themeBtn'))$('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');
- if(navigator.onLine){try{await Promise.race([supabasePull(true),new Promise(resolve=>setTimeout(()=>resolve(false),12000))])}catch(e){console.warn('CCPB: abertura com cache local; nuvem indisponível.',e)}}
+ if(navigator.onLine){try{await Promise.race([supabasePull(true),new Promise(resolve=>setTimeout(()=>resolve(false),5000))])}catch(e){console.warn('CCPB: abertura com cache local; nuvem indisponível.',e)}}
  normalizeSystemUsers();
  if(state.config?.systemBaseline!=='v6.2-zero'){
   state.records=[];state.positions=[];state.logs=[];state.closures=[];state.shiftRestarts=[];state.releases=[];state.archives=[];
