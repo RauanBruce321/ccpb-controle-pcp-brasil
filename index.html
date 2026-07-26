@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111f46">
   <meta name="description" content="CCPB - Controle de PCP Brasil">
-  <title>CCPB - Controle de PCP Brasil | Versão 6.4</title>
+  <title>CCPB - Controle de PCP Brasil | Versão 7.0</title>
   <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22CCPB%20-%20Controle%20de%20PCP%20Brasil%22%2C%22short_name%22%3A%22CCPB%22%2C%22start_url%22%3A%22./%22%2C%22scope%22%3A%22./%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b1638%22%2C%22theme_color%22%3A%22%23111f46%22%2C%22lang%22%3A%22pt-BR%22%7D">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -162,7 +162,7 @@ body.dark .excel-filter-menu input,body.dark .excel-filter-menu button,body.dark
   <script>
 'use strict';
 
-const VERSION='6.4';
+const VERSION='7.0';
 const SUPABASE_URL='https://saezanqsbveihdvtavsh.supabase.co';
 const SUPABASE_KEY='sb_publishable_xQHUV3HJwNgQyJspYwOGwg_8ToRx7S2';
 const SUPABASE_TABLE='ccpb';
@@ -200,8 +200,11 @@ const DEFAULT_USERS=[
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
 let supabaseClient=null,supabaseChannel=null,cloudApplying=false,cloudSyncInFlight=false,cloudSyncQueued=false,cloudPullInFlight=false;
 let realtimeChannel=null,realtimePullTimer=null,realtimeReconnectTimer=null,realtimeStarted=false,realtimeConnecting=false,lightPollInFlight=false;
-let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0;
+let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0,pendingSystemReset=false;
 const cloudHashes=new Map();
+const localHashes=new Map();
+const localIdsByGroup=new Map();
+let lastCloudRevision=0;
 const CLIENT_ID=(crypto.randomUUID?.()||Math.random().toString(36).slice(2));
 const cache={records:[],byAwb:new Map(),byMaster:new Map(),byNote:new Map()};
 const ROLE_LABELS={admin:'Administrador',tower:'Torre de Controle',leader:'Líder Operacional',assistant:'Assistente Operacional',triage:'Triagem Operacional',receiving:'Recebimento Operacional'};
@@ -250,15 +253,13 @@ async function saveState(immediate=false){
  }
  if(!immediate){
   clearTimeout(autosaveTimer);
-  autosaveTimer=setTimeout(()=>saveState(true),180);
+  autosaveTimer=setTimeout(()=>saveState(true),120);
   return;
  }
  clearTimeout(autosaveTimer);autosaveTimer=null;
+ if(!cloudApplying)collectLocalChanges();
  await persistLocalState();
- if(!cloudApplying){
-  // A tela responde imediatamente; a nuvem sincroniza em paralelo.
-  queueSupabasePush(0);
- }
+ if(!cloudApplying)queueSupabasePush(0);
 }
 function queueSupabasePush(delay=0){
  cloudSyncQueued=true;
@@ -409,7 +410,7 @@ function adminFirebase(){
  $('#saveSupabase').onclick=async()=>{state.config.supabase={...f,enabled:$('#sbEnabled').checked,url:SUPABASE_URL,key:SUPABASE_KEY,table:SUPABASE_TABLE,rowId:SUPABASE_ROW_ID};await saveState(true);const ok=await supabaseTest();toast(ok?'Supabase conectado e sincronizado.':'Não foi possível conectar ao Supabase.',ok?'ok':'error');if(ok)adminFirebase()};
  $('#pullSupabase').onclick=async()=>{const ok=await supabasePull(true);toast(ok?'Dados da nuvem carregados.':'Não foi possível carregar os dados da nuvem.',ok?'ok':'error');if(ok)adminFirebase()};
 }
-function adminClear(){$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Zerar todo o sistema</h3></div><div class="panel-body"><p>Apaga absolutamente todos os dados operacionais da memória local e do Supabase, inclusive previsões, Masters, AWBs, Notas, posições, recebimento, triagem, Bolsão, histórico, liberações, arquivos e turnos. Usuários, permissões e configurações serão mantidos.</p><button id="clearAll" class="btn danger" style="margin-top:15px">ZERAR TODO O SISTEMA</button></div></div>`;$('#clearAll').onclick=async()=>{if(!confirm('ATENÇÃO: deseja realmente apagar TODOS os dados operacionais, inclusive tudo que está previsto para receber?'))return;if(!confirm('Confirme novamente: esta ação apagará toda a operação e não poderá ser desfeita.'))return;const users=safeClone(state.users),config=safeClone(state.config);const btn=$('#clearAll');btn.disabled=true;btn.textContent='ZERANDO...';try{const client=initSupabase();if(!client||!navigator.onLine)throw new Error('É necessário estar online para zerar o Supabase.');cloudSyncQueued=false;localChangesPending=false;await purgeEntireCloud(client);try{const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}catch(dbError){console.warn('CCPB: não foi possível limpar o IndexedDB antes de recriar o estado.',dbError)}for(const key of Object.keys(localStorage)){if(key!=='ccpb_theme')localStorage.removeItem(key)}state=emptyState();state.users=users;state.config=config;state.config.systemBaseline='v6.2-zero';state.records=[];state.positions=[];state.logs=[];state.releases=[];state.archives=[];state.closures=[];state.shiftRestarts=[];state.updatedAt=Date.now();knownCloudIds.clear();cloudHashes.clear();cache.records=[];cache.byAwb.clear();cache.byMaster.clear();cache.byNote.clear();rebuildCache();sessionStorage.removeItem('ccpb_session');await persistLocalState();localChangesPending=true;const saved=await supabasePush(true);if(!saved)throw new Error('O banco foi apagado, mas não foi possível recriar usuários e configurações.');scheduleActionSync(700);toast('Sistema totalmente zerado. Todos os dados operacionais e o Bolsão foram apagados da base.','ok');adminClear()}catch(e){console.error('CCPB: falha ao zerar sistema.',e);toast('Falha ao zerar completamente: '+(e?.message||'erro desconhecido'),'error');btn.disabled=false;btn.textContent='ZERAR TODO O SISTEMA'}}}
+function adminClear(){$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Zerar todo o sistema</h3></div><div class="panel-body"><p>Apaga absolutamente todos os dados operacionais da memória local e do Supabase, inclusive previsões, Masters, AWBs, Notas, posições, recebimento, triagem, Bolsão, histórico, liberações, arquivos e turnos. Usuários, permissões e configurações serão mantidos.</p><button id="clearAll" class="btn danger" style="margin-top:15px">ZERAR TODO O SISTEMA</button></div></div>`;$('#clearAll').onclick=async()=>{if(!confirm('ATENÇÃO: deseja realmente apagar TODOS os dados operacionais, inclusive tudo que está previsto para receber?'))return;if(!confirm('Confirme novamente: esta ação apagará toda a operação e não poderá ser desfeita.'))return;const users=safeClone(state.users),config=safeClone(state.config);const btn=$('#clearAll');btn.disabled=true;btn.textContent='ZERANDO...';try{const client=initSupabase();if(!client||!navigator.onLine)throw new Error('É necessário estar online para zerar o Supabase.');cloudSyncQueued=false;localChangesPending=false;await purgeEntireCloud(client);try{const db=await openDb();await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}catch(dbError){console.warn('CCPB: não foi possível limpar o IndexedDB antes de recriar o estado.',dbError)}for(const key of Object.keys(localStorage)){if(key!=='ccpb_theme')localStorage.removeItem(key)}state=emptyState();state.users=users;state.config=config;state.config.systemBaseline='v6.2-zero';state.records=[];state.positions=[];state.logs=[];state.releases=[];state.archives=[];state.closures=[];state.shiftRestarts=[];state.updatedAt=Date.now();knownCloudIds.clear();cloudHashes.clear();cache.records=[];cache.byAwb.clear();cache.byMaster.clear();cache.byNote.clear();rebuildCache();sessionStorage.removeItem('ccpb_session');initializeLocalTracking();pendingSystemReset=true;localChangesPending=true;collectLocalChanges();await persistLocalState();const saved=await supabasePush(true);if(!saved)throw new Error('O banco foi apagado, mas não foi possível recriar usuários e configurações.');scheduleActionSync(700);toast('Sistema totalmente zerado. Todos os dados operacionais e o Bolsão foram apagados da base.','ok');adminClear()}catch(e){console.error('CCPB: falha ao zerar sistema.',e);toast('Falha ao zerar completamente: '+(e?.message||'erro desconhecido'),'error');btn.disabled=false;btn.textContent='ZERAR TODO O SISTEMA'}}}
 
 function openModal(title,body){$('#modalRoot').innerHTML=`<div class="modal-backdrop"><div class="modal"><div class="modal-head"><h3>${title}</h3><button id="modalClose" class="icon-btn">×</button></div><div class="modal-body">${body}</div></div></div>`;$('#modalClose').onclick=closeModal}
 function closeModal(){$('#modalRoot').innerHTML=''}
@@ -478,7 +479,7 @@ function initSupabase(){
 }
 function cloudEnabled(){return true}
 let lastUIInteractionAt=0;
-['pointerdown','touchstart','wheel','scroll'].forEach(ev=>document.addEventListener(ev,()=>{lastUIInteractionAt=Date.now()},{passive:true,capture:true}));
+['pointerdown','touchstart','wheel','scroll','keydown','input'].forEach(ev=>document.addEventListener(ev,()=>{lastUIInteractionAt=Date.now()},{passive:true,capture:true}));
 function hasOpenModal(){return Boolean($('#modalRoot')?.children.length)}
 function hasOpenFilter(){return Boolean(document.querySelector('.excel-filter.open'))}
 function hasActiveFilter(){return Boolean(document.querySelector('.excel-filter.active'))}
@@ -511,7 +512,7 @@ function restoreViewState(v){
   if(v.activeKey){const el=document.getElementById(v.activeKey)||document.querySelector(`[name="${CSS.escape(v.activeKey)}"]`);if(el){el.focus({preventScroll:true});const saved=(v.controls||[]).find(x=>x.key===v.activeKey);if(saved&&saved.start!==null&&el.setSelectionRange)try{el.setSelectionRange(saved.start,saved.end)}catch(_){}}}
  });
 }
-function canRefreshCurrentView(){if(currentPage==='triage'&&triagePending)return false;return !hasOpenModal()&&!hasOpenFilter()}
+function canRefreshCurrentView(){if(currentPage==='triage'&&triagePending)return false;if(Date.now()-lastUIInteractionAt<900)return false;return !hasOpenModal()&&!hasOpenFilter()}
 let pendingVisualRefresh=false;
 function refreshCurrentViewPreservingState(){
  if(!session||!currentPage)return;
@@ -521,29 +522,29 @@ function refreshCurrentViewPreservingState(){
  requestAnimationFrame(()=>{PAGES[currentPage]?.render();restoreViewState(viewState)});
 }
 
-function scheduleRealtimePull(delay=80){
+function scheduleRealtimePull(delay=40,payload=null){
  clearTimeout(realtimePullTimer);
  realtimePullTimer=setTimeout(()=>{
-  if(cloudSyncInFlight||cloudPullInFlight){scheduleRealtimePull(180);return}
-  supabasePull(false);
+  if(cloudSyncInFlight||cloudPullInFlight){scheduleRealtimePull(120,payload);return}
+  if(payload)applyRemoteEnvelope(payload);else checkRemoteStamp();
  },delay);
 }
 let actionSyncTimer=null;
-function scheduleActionSync(delay=900){
+function scheduleActionSync(delay=120){
  clearTimeout(actionSyncTimer);
- actionSyncTimer=setTimeout(async()=>{
-  if(isEditingUI()){scheduleActionSync(700);return}
-  if(localChangesPending){queueSupabasePush(0);scheduleActionSync(900);return}
-  if(!cloudSyncInFlight&&!cloudPullInFlight)await supabasePull(false);
+ actionSyncTimer=setTimeout(()=>{
+  if(localChangesPending)queueSupabasePush(0);
  },delay);
 }
-async function checkRemoteStamp(){return supabasePull(false)}
 
 const CLOUD_TABLE='ccpb';
 const CLOUD_PREFIX='v12:';
+const CLOUD_META_ID=CLOUD_PREFIX+'meta:principal';
 const CLOUD_GROUPS=['users','config','records','positions','logs','closures','shiftRestarts','releases','archives'];
 const CLOUD_SINGLETONS=new Set(['users','config']);
 const knownCloudIds=new Map();
+const pendingWrites=new Map();
+const pendingDeletes=new Map();
 function stableJson(value){
  const seen=new WeakSet();
  const walk=v=>{if(v===null||typeof v!=='object')return v;if(seen.has(v))return null;seen.add(v);if(Array.isArray(v))return v.map(walk);return Object.keys(v).sort().reduce((o,k)=>{o[k]=walk(v[k]);return o},{})};
@@ -560,147 +561,107 @@ function tableRows(group,current=state){
  if(CLOUD_SINGLETONS.has(group))return [{id:cloudRowId(group,'principal'),dados:safeClone(current[group]??(group==='users'?DEFAULT_USERS:{})),atualizado_em:new Date().toISOString()}];
  return (current[group]||[]).map((item,index)=>({id:cloudRowId(group,entityKey(group,item,index)),dados:safeClone(item),atualizado_em:new Date().toISOString()}));
 }
-async function fetchTable(client,group){
- const prefix=cloudRowId(group,'');
- const all=[];const pageSize=1000;let from=0;
- while(true){
-  const {data,error}=await client.from(CLOUD_TABLE).select('id,dados,atualizado_em').like('id',prefix+'%').range(from,from+pageSize-1);
-  if(error)throw error;
-  const rows=data||[];all.push(...rows);
-  if(rows.length<pageSize)break;
-  from+=pageSize;
+function initializeLocalTracking(){
+ localHashes.clear();localIdsByGroup.clear();pendingWrites.clear();pendingDeletes.clear();
+ for(const group of CLOUD_GROUPS){
+  const rows=tableRows(group,state),hm=new Map(),ids=new Set();
+  for(const row of rows){ids.add(String(row.id));hm.set(String(row.id),fastHash(row.dados))}
+  localHashes.set(group,hm);localIdsByGroup.set(group,ids);
  }
+}
+function collectLocalChanges(){
+ for(const group of CLOUD_GROUPS){
+  const rows=tableRows(group,state),oldHashes=localHashes.get(group)||new Map(),oldIds=localIdsByGroup.get(group)||new Set();
+  const nowHashes=new Map(),nowIds=new Set(),writes=pendingWrites.get(group)||new Map(),deletes=pendingDeletes.get(group)||new Set();
+  for(const row of rows){
+   const id=String(row.id),hash=fastHash(row.dados);nowIds.add(id);nowHashes.set(id,hash);
+   if(oldHashes.get(id)!==hash){writes.set(id,row);deletes.delete(id)}
+  }
+  for(const id of oldIds)if(!nowIds.has(id)){deletes.add(id);writes.delete(id)}
+  localHashes.set(group,nowHashes);localIdsByGroup.set(group,nowIds);
+  if(writes.size)pendingWrites.set(group,writes);else pendingWrites.delete(group);
+  if(deletes.size)pendingDeletes.set(group,deletes);else pendingDeletes.delete(group);
+ }
+}
+async function fetchTable(client,group){
+ const prefix=cloudRowId(group,''),all=[];const pageSize=1000;let from=0;
+ while(true){const {data,error}=await client.from(CLOUD_TABLE).select('id,dados,atualizado_em').like('id',prefix+'%').range(from,from+pageSize-1);if(error)throw error;const rows=data||[];all.push(...rows);if(rows.length<pageSize)break;from+=pageSize}
  return all;
 }
-async function purgeGranularCloud(client=initSupabase()){
- if(!client)throw new Error('Supabase não disponível.');
- for(const group of CLOUD_GROUPS){
-  const rows=await fetchTable(client,group);
-  if(rows.length)await deleteIds(client,rows.map(r=>String(r.id)));
-  rememberGroup(group,[]);
- }
+async function fetchIds(client,ids){
+ const out=[];for(let i=0;i<ids.length;i+=200){const {data,error}=await client.from(CLOUD_TABLE).select('id,dados,atualizado_em').in('id',ids.slice(i,i+200));if(error)throw error;out.push(...(data||[]))}return out;
 }
-async function purgeEntireCloud(client=initSupabase()){
- if(!client)throw new Error('Supabase não disponível.');
- const pageSize=1000;
- while(true){
-  const {data,error}=await client.from(CLOUD_TABLE).select('id').range(0,pageSize-1);
-  if(error)throw error;
-  const ids=(data||[]).map(row=>String(row.id)).filter(Boolean);
-  if(!ids.length)break;
-  await deleteIds(client,ids);
-  if(ids.length<pageSize)break;
- }
- knownCloudIds.clear();
- cloudHashes.clear();
+async function purgeGranularCloud(client=initSupabase()){if(!client)throw new Error('Supabase não disponível.');for(const group of CLOUD_GROUPS){const rows=await fetchTable(client,group);if(rows.length)await deleteIds(client,rows.map(r=>String(r.id)));rememberGroup(group,[])}}
+async function purgeEntireCloud(client=initSupabase()){if(!client)throw new Error('Supabase não disponível.');const pageSize=1000;while(true){const {data,error}=await client.from(CLOUD_TABLE).select('id').range(0,pageSize-1);if(error)throw error;const ids=(data||[]).map(row=>String(row.id)).filter(Boolean);if(!ids.length)break;await deleteIds(client,ids);if(ids.length<pageSize)break}knownCloudIds.clear();cloudHashes.clear()}
+async function readLegacyState(client){const {data,error}=await client.from(CLOUD_TABLE).select('id,dados,atualizado_em').in('id',['principal','Diretor','ccpb_principal']);if(error)throw error;const valid=(data||[]).filter(r=>r?.dados&&typeof r.dados==='object'&&Object.keys(r.dados).length);valid.sort((a,b)=>new Date(b.atualizado_em||0)-new Date(a.atualizado_em||0));return valid[0]?.dados||null}
+function rememberGroup(group,rows){const prefix=group+':';for(const key of [...cloudHashes.keys()])if(key.startsWith(prefix))cloudHashes.delete(key);const ids=new Set();for(const row of rows||[]){ids.add(String(row.id));cloudHashes.set(prefix+row.id,fastHash(row.dados))}knownCloudIds.set(group,ids)}
+async function upsertChunks(client,rows){for(let i=0;i<rows.length;i+=750){const {error}=await client.from(CLOUD_TABLE).upsert(rows.slice(i,i+750),{onConflict:'id'});if(error)throw error}}
+async function deleteIds(client,ids){for(let i=0;i<ids.length;i+=500){const {error}=await client.from(CLOUD_TABLE).delete().in('id',ids.slice(i,i+500));if(error)throw error}}
+async function migrateLegacyIfNeeded(client){const checks=await Promise.all(['records','users','config'].map(g=>fetchTable(client,g).catch(()=>[])));if(checks.some(rows=>rows.length))return false;const legacy=await readLegacyState(client);if(!legacy)return false;cloudApplying=true;state=mergeCloudState(state,legacy);cloudApplying=false;rebuildCache();initializeLocalTracking();localChangesPending=true;collectLocalChanges();await persistLocalState();return true}
+function groupArrayKey(group,item){return entityKey(group,item,0)}
+function applyRowsToState(group,rows,deletedIds=[]){
+ if(CLOUD_SINGLETONS.has(group)){const row=rows.find(r=>String(r.id)===cloudRowId(group,'principal'));if(row)state[group]=safeClone(row.dados);return}
+ const arr=Array.isArray(state[group])?state[group]:[],map=new Map(arr.map((item,index)=>[cloudRowId(group,entityKey(group,item,index)),item]));
+ for(const id of deletedIds)map.delete(String(id));for(const row of rows)map.set(String(row.id),safeClone(row.dados));state[group]=[...map.values()];
 }
-async function readLegacyState(client){
- const {data,error}=await client.from(CLOUD_TABLE).select('id,dados,atualizado_em').in('id',['principal','Diretor','ccpb_principal']);
- if(error)throw error;
- const valid=(data||[]).filter(r=>r?.dados&&typeof r.dados==='object'&&Object.keys(r.dados).length);
- valid.sort((a,b)=>new Date(b.atualizado_em||0)-new Date(a.atualizado_em||0));
- return valid[0]?.dados||null;
+async function applyRemoteEnvelope(envelope){
+ if(!envelope||envelope.clientId===CLIENT_ID||Number(envelope.revision||0)<=lastCloudRevision)return true;
+ if(cloudPullInFlight||cloudSyncInFlight){scheduleRealtimePull(100,envelope);return true}
+ const client=initSupabase();if(!client)return false;cloudPullInFlight=true;
+ try{
+  if(envelope.reset){
+   const users=state.users,config=state.config;state=emptyState();state.users=users;state.config=config;state.records=[];state.positions=[];state.logs=[];state.closures=[];state.shiftRestarts=[];state.releases=[];state.archives=[];
+   rebuildCache();initializeLocalTracking();localChangesPending=false;lastCloudRevision=Number(envelope.revision||Date.now());await persistLocalState();refreshCurrentViewPreservingState();toast('O sistema foi zerado pelo Administrador.','ok');return true;
+  }
+  cloudApplying=true;
+  for(const change of envelope.changes||[]){
+   let rows=[];if(change.full)rows=await fetchTable(client,change.group);else if(change.upserts?.length)rows=await fetchIds(client,change.upserts);
+   applyRowsToState(change.group,rows,change.deletes||[]);
+  }
+  cloudApplying=false;normalizeSystemUsers();rebuildCache();initializeLocalTracking();localChangesPending=false;lastCloudRevision=Number(envelope.revision||Date.now());await persistLocalState();
+  if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}
+  refreshCurrentViewPreservingState();return true;
+ }catch(e){console.error('CCPB V7: falha na atualização incremental.',e);return supabasePull(true)}finally{cloudApplying=false;cloudPullInFlight=false}
 }
-function rememberGroup(group,rows){
- const prefix=group+':';
- for(const key of [...cloudHashes.keys()])if(key.startsWith(prefix))cloudHashes.delete(key);
- const ids=new Set();
- for(const row of rows||[]){ids.add(String(row.id));cloudHashes.set(prefix+row.id,fastHash(row.dados))}
- knownCloudIds.set(group,ids);
-}
-async function upsertChunks(client,rows){
- for(let i=0;i<rows.length;i+=250){const {error}=await client.from(CLOUD_TABLE).upsert(rows.slice(i,i+250),{onConflict:'id'});if(error)throw error}
-}
-async function deleteIds(client,ids){
- for(let i=0;i<ids.length;i+=250){const {error}=await client.from(CLOUD_TABLE).delete().in('id',ids.slice(i,i+250));if(error)throw error}
-}
-async function migrateLegacyIfNeeded(client){
- const checks=await Promise.all(['records','users','config'].map(g=>fetchTable(client,g).catch(()=>[])));
- if(checks.some(rows=>rows.length))return false;
- const legacy=await readLegacyState(client);
- if(!legacy)return false;
- cloudApplying=true;state=mergeCloudState(state,legacy);cloudApplying=false;rebuildCache();localChangesPending=true;await persistLocalState();
- return true;
+async function writeCloudMeta(client,envelope){const row={id:CLOUD_META_ID,dados:envelope,atualizado_em:new Date().toISOString()};const {error}=await client.from(CLOUD_TABLE).upsert(row,{onConflict:'id'});if(error)throw error}
+async function checkRemoteStamp(){
+ if(lightPollInFlight||!navigator.onLine||cloudSyncInFlight||cloudPullInFlight)return false;const client=initSupabase();if(!client)return false;lightPollInFlight=true;
+ try{const {data,error}=await client.from(CLOUD_TABLE).select('dados').eq('id',CLOUD_META_ID).maybeSingle();if(error)throw error;const env=data?.dados;if(env&&Number(env.revision||0)>lastCloudRevision&&env.clientId!==CLIENT_ID)return await applyRemoteEnvelope(env);return true}catch(e){console.warn('CCPB V7: verificação leve indisponível.',e);return false}finally{lightPollInFlight=false}
 }
 async function supabasePush(silent=false){
- if(!cloudEnabled()||!navigator.onLine)return false;
- const client=initSupabase();if(!client)return false;
- if(cloudSyncInFlight){cloudSyncQueued=true;return true}
- cloudSyncInFlight=true;
+ if(!cloudEnabled()||!navigator.onLine)return false;const client=initSupabase();if(!client)return false;if(cloudSyncInFlight){cloudSyncQueued=true;return true}cloudSyncInFlight=true;
  try{
-  await migrateLegacyIfNeeded(client);
-  let changed=0;
+  collectLocalChanges();if(pendingSystemReset){for(const group of ['users','config']){const map=pendingWrites.get(group)||new Map();for(const row of tableRows(group,state))map.set(String(row.id),row);pendingWrites.set(group,map)}}const revision=Date.now();const changes=[];let changed=0;
   for(const group of CLOUD_GROUPS){
-   const localRows=tableRows(group,state);
-   const remoteRows=await fetchTable(client,group);
-   const remoteById=new Map(remoteRows.map(r=>[String(r.id),r]));
-   const localIds=new Set(localRows.map(r=>String(r.id)));
-   const writes=[];
-   for(const row of localRows){
-    const remote=remoteById.get(String(row.id));
-    if(!remote||fastHash(remote.dados)!==fastHash(row.dados))writes.push(row);
-   }
-   // Exclui somente itens que este aparelho já conhecia e que foram removidos
-   // conscientemente nele. Itens criados por outro aparelho nunca são apagados por engano.
-   const previouslyKnown=knownCloudIds.get(group)||new Set();
-   const deletes=[...previouslyKnown].filter(id=>!localIds.has(id));
-   if(writes.length){await upsertChunks(client,writes);changed+=writes.length}
-   if(deletes.length){await deleteIds(client,deletes);changed+=deletes.length}
-   const finalRows=remoteRows.filter(r=>!deletes.includes(String(r.id)));
-   const finalMap=new Map(finalRows.map(r=>[String(r.id),r]));
-   for(const row of writes)finalMap.set(String(row.id),row);
-   rememberGroup(group,[...finalMap.values()]);
+   const writes=[...(pendingWrites.get(group)?.values()||[])],deletes=[...(pendingDeletes.get(group)||[])];if(!writes.length&&!deletes.length)continue;
+   if(writes.length)await upsertChunks(client,writes);if(deletes.length)await deleteIds(client,deletes);changed+=writes.length+deletes.length;
+   changes.push({group,upserts:writes.length>1200?[]:writes.map(r=>String(r.id)),deletes,full:writes.length>1200});
   }
-  const now=new Date().toISOString();state.updatedAt=Date.now();localChangesPending=false;lastSuccessfulPushAt=Date.now();
-  state.config=state.config||emptyState().config;
-  state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:now};
-  await persistLocalState();
+  const envelope={clientId:CLIENT_ID,revision,reset:pendingSystemReset,changes,at:Date.now()};
+  await writeCloudMeta(client,envelope);lastCloudRevision=revision;pendingSystemReset=false;pendingWrites.clear();pendingDeletes.clear();initializeLocalTracking();localChangesPending=false;lastSuccessfulPushAt=Date.now();
+  state.config=state.config||emptyState().config;state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7',lastSync:new Date().toISOString()};await persistLocalState();
   if(pendingLiveEvents.length){const events=pendingLiveEvents.splice(0);for(const evt of events)await broadcastLiveEvent(evt)}
-  try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-sync',payload:{clientId:CLIENT_ID,at:Date.now()}})}catch(_){ }
-  if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');
-  return true;
- }catch(e){localChangesPending=true;console.error('CCPB V6: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
- finally{cloudSyncInFlight=false;if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),500)}}
+  try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-sync-v7',payload:envelope})}catch(_){ }
+  if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');return true;
+ }catch(e){localChangesPending=true;console.error('CCPB V7: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
+ finally{cloudSyncInFlight=false;if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),120)}}
 }
 async function supabasePull(force=false){
- if(!cloudEnabled()||!navigator.onLine)return false;
- if(cloudPullInFlight||cloudSyncInFlight)return true;
- if(localChangesPending&&!force)return true;
- const client=initSupabase();if(!client)return false;
- cloudPullInFlight=true;
+ if(!cloudEnabled()||!navigator.onLine)return false;if(cloudPullInFlight||cloudSyncInFlight)return true;if(localChangesPending&&!force)return true;const client=initSupabase();if(!client)return false;cloudPullInFlight=true;
  try{
-  await migrateLegacyIfNeeded(client);
-  const remote=emptyState();
-  for(const group of CLOUD_GROUPS){
-   const rows=await fetchTable(client,group);rememberGroup(group,rows);
-   if(CLOUD_SINGLETONS.has(group))remote[group]=rows.find(r=>r.id===cloudRowId(group,'principal'))?.dados??(group==='users'?DEFAULT_USERS:emptyState().config);
-   else remote[group]=rows.map(r=>r.dados).filter(Boolean);
-  }
-  remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;
-  remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'dados granulares v12',lastSync:new Date().toISOString()};
-  cloudApplying=true;state=localChangesPending?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();localChangesPending=false;rebuildCache();await persistLocalState();
-  if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}
-  refreshCurrentViewPreservingState();
-  return true;
- }catch(e){console.error('CCPB V6: falha ao carregar Supabase.',e);return false}
- finally{cloudApplying=false;cloudPullInFlight=false}
+  await migrateLegacyIfNeeded(client);const remote=emptyState();for(const group of CLOUD_GROUPS){const rows=await fetchTable(client,group);rememberGroup(group,rows);if(CLOUD_SINGLETONS.has(group))remote[group]=rows.find(r=>r.id===cloudRowId(group,'principal'))?.dados??(group==='users'?DEFAULT_USERS:emptyState().config);else remote[group]=rows.map(r=>r.dados).filter(Boolean)}
+  const {data:meta}=await client.from(CLOUD_TABLE).select('dados').eq('id',CLOUD_META_ID).maybeSingle();lastCloudRevision=Math.max(lastCloudRevision,Number(meta?.dados?.revision||0));
+  remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7',lastSync:new Date().toISOString()};
+  cloudApplying=true;state=localChangesPending?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();localChangesPending=false;rebuildCache();initializeLocalTracking();await persistLocalState();if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}refreshCurrentViewPreservingState();return true;
+ }catch(e){console.error('CCPB V7: falha ao carregar Supabase.',e);return false}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 function startSupabaseRealtime(){
  const client=initSupabase();if(!client||supabaseChannel)return;
- supabaseChannel=client.channel('ccpb-v14-live',{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
-  .on('broadcast',{event:'ccpb-sync'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(0)})
-  .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload);scheduleRealtimePull(0)})
-  .on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE},payload=>{
-   const id=String(payload?.new?.id||payload?.old?.id||'');
-   if(id.startsWith(CLOUD_PREFIX))scheduleRealtimePull(0);
-  })
-  .subscribe(status=>{
-   if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);scheduleRealtimePull(0)}
-   if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
-    clearTimeout(realtimeReconnectTimer);
-    realtimeReconnectTimer=setTimeout(async()=>{await stopSupabaseRealtime();startSupabaseRealtime()},1200);
-   }
-  });
+ supabaseChannel=client.channel('ccpb-v7-wms-live',{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
+  .on('broadcast',{event:'ccpb-sync-v7'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(0,payload)})
+  .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload)})
+  .on('postgres_changes',{event:'UPDATE',schema:'public',table:CLOUD_TABLE,filter:`id=eq.${CLOUD_META_ID}`},payload=>{const env=payload?.new?.dados;if(env?.clientId!==CLIENT_ID)scheduleRealtimePull(20,env)})
+  .subscribe(status=>{if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);checkRemoteStamp()}if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){clearTimeout(realtimeReconnectTimer);realtimeReconnectTimer=setTimeout(async()=>{await stopSupabaseRealtime();startSupabaseRealtime()},1000)}});
 }
 async function stopSupabaseRealtime(){if(supabaseChannel&&supabaseClient){try{await supabaseClient.removeChannel(supabaseChannel)}catch(e){}}supabaseChannel=null}
 async function supabaseTest(){const pulled=await supabasePull(true);if(!pulled)return false;return await supabasePush(true)}
@@ -713,7 +674,7 @@ async function init(){
  state.users.forEach(u=>{u.permissions=Array.isArray(u.permissions)?u.permissions:[];if(u.role==='admin')u.permissions=[...PERMISSIONS];if(u.role==='triage'&&!u.permissions.includes('triage.multipleNotesPosition'))u.permissions.push('triage.multipleNotesPosition')});
  if(!state.records)state.records=[];if(!state.positions)state.positions=[];if(!state.logs)state.logs=[];if(!state.shiftRestarts)state.shiftRestarts=[];if(!state.config)state.config=emptyState().config;
  if(!state.config.supabase)state.config.supabase={enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:SUPABASE_TABLE,rowId:SUPABASE_ROW_ID,lastSync:null};
- delete state.config.firebase;rebuildCache();
+ delete state.config.firebase;rebuildCache();initializeLocalTracking();
  const applyTheme=(t,persist=true)=>{document.body.classList.toggle('dark',t==='dark');if(persist)localStorage.setItem('ccpb_theme',t);if($('#themeBtn'))$('#themeBtn').textContent=t==='dark'?'☀️':'🌙'};
  applyTheme(localStorage.getItem('ccpb_theme')||'light',false);if($('#themeBtn'))$('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');
  if(navigator.onLine){try{await Promise.race([supabasePull(true),new Promise(resolve=>setTimeout(()=>resolve(false),12000))])}catch(e){console.warn('CCPB: abertura com cache local; nuvem indisponível.',e)}}
@@ -737,10 +698,10 @@ async function init(){
  if($('#installAppBtn'))$('#installAppBtn').onclick=async()=>{if(!deferredInstallPrompt){toast('Use o menu do navegador e escolha Instalar aplicativo ou Adicionar à tela inicial.');return}deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('#installAppBtn').classList.add('hidden')};
  addEventListener('appinstalled',()=>{$('#installAppBtn')?.classList.add('hidden');toast('CCPB instalado com sucesso.','ok')});
  $('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};
- addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else supabasePull(true)});addEventListener('offline',onlineUpdate);addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt);scheduleRealtimePull(0)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
+ addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else checkRemoteStamp()});addEventListener('offline',onlineUpdate);addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
- setInterval(()=>{if(navigator.onLine&&!cloudSyncInFlight&&!cloudPullInFlight&&!localChangesPending)supabasePull(false)},900);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},500);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},400);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
+ setInterval(()=>{if(navigator.onLine&&!localChangesPending)checkRemoteStamp()},5000);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},350);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},250);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
 
