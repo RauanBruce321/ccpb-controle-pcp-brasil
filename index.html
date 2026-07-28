@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111f46">
   <meta name="description" content="CCPB - Controle de PCP Brasil">
-  <title>CCPB - Controle de PCP Brasil | Versão 7.1</title>
+  <title>CCPB - Controle de PCP Brasil | Versão 7.1 Otimizada</title>
   <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22CCPB%20-%20Controle%20de%20PCP%20Brasil%22%2C%22short_name%22%3A%22CCPB%22%2C%22start_url%22%3A%22./%22%2C%22scope%22%3A%22./%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b1638%22%2C%22theme_color%22%3A%22%23111f46%22%2C%22lang%22%3A%22pt-BR%22%7D">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -200,6 +200,7 @@ const DEFAULT_USERS=[
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
 let supabaseClient=null,supabaseChannel=null,cloudApplying=false,cloudSyncInFlight=false,cloudSyncQueued=false,cloudPullInFlight=false;
 let realtimeChannel=null,realtimePullTimer=null,realtimeReconnectTimer=null,realtimeStarted=false,realtimeConnecting=false,lightPollInFlight=false;
+let realtimeConnected=false,hiddenRealtimeTimer=null;
 let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0,pendingSystemReset=false;
 const cloudHashes=new Map();
 const localHashes=new Map();
@@ -267,12 +268,14 @@ async function saveState(immediate=false){
 function queueSupabasePush(delay=0){
  cloudSyncQueued=true;
  clearTimeout(queueSupabasePush.timer);
+ // Agrupa alterações próximas em um único envio. Chamadas normais aguardam ao menos 900 ms.
+ const batchDelay=Math.max(Number(delay)||0,900);
  queueSupabasePush.timer=setTimeout(async()=>{
   if(!navigator.onLine||cloudApplying)return;
   cloudSyncQueued=false;
   const ok=await supabasePush(true).catch(e=>{console.error('CCPB: falha ao sincronizar automaticamente.',e);return false});
   if(!ok)console.warn('CCPB: alteração mantida localmente e aguardando nova tentativa de sincronização.');
- },delay);
+ },batchDelay);
 }
 function rebuildCache(){cache.records=state.records;cache.byAwb=new Map();cache.byMaster=new Map();cache.byNote=new Map();for(const r of state.records){cache.byAwb.set(norm(r.awb),r);const m=norm(r.master),n=norm(r.note);if(!cache.byMaster.has(m))cache.byMaster.set(m,[]);cache.byMaster.get(m).push(r);if(!cache.byNote.has(n))cache.byNote.set(n,[]);cache.byNote.get(n).push(r)}}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -540,7 +543,7 @@ function scheduleRealtimePull(delay=40,payload=null){
  },delay);
 }
 let actionSyncTimer=null;
-function scheduleActionSync(delay=120){
+function scheduleActionSync(delay=300){
  clearTimeout(actionSyncTimer);
  actionSyncTimer=setTimeout(()=>{
   if(localChangesPending)queueSupabasePush(0);
@@ -654,10 +657,9 @@ async function supabasePush(silent=false){
   await writeCloudMeta(client,envelope);lastCloudRevision=revision;pendingSystemReset=false;pendingWrites.clear();pendingDeletes.clear();initializeLocalTracking();localChangesPending=false;lastSuccessfulPushAt=Date.now();
   state.config=state.config||emptyState().config;state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7.1',lastSync:new Date().toISOString()};await persistLocalState();
   if(pendingLiveEvents.length){const events=pendingLiveEvents.splice(0);for(const evt of events)await broadcastLiveEvent(evt)}
-  try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-sync-v7',payload:envelope})}catch(_){ }
   if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');return true;
  }catch(e){localChangesPending=true;console.error('CCPB V7: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
- finally{cloudSyncInFlight=false;if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),120)}}
+ finally{cloudSyncInFlight=false;if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),900)}}
 }
 async function supabasePull(force=false){
  if(!cloudEnabled()||!navigator.onLine)return false;if(cloudPullInFlight||cloudSyncInFlight)return true;if(localChangesPending&&!force)return true;const client=initSupabase();if(!client)return false;cloudPullInFlight=true;
@@ -669,14 +671,21 @@ async function supabasePull(force=false){
  }catch(e){console.error('CCPB V7: falha ao carregar Supabase.',e);return false}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 function startSupabaseRealtime(){
- const client=initSupabase();if(!client||supabaseChannel)return;
- supabaseChannel=client.channel('ccpb-v7-wms-live',{config:{broadcast:{self:false},presence:{key:CLIENT_ID}}})
-  .on('broadcast',{event:'ccpb-sync-v7'},({payload})=>{if(payload?.clientId!==CLIENT_ID)scheduleRealtimePull(0,payload)})
+ const client=initSupabase();if(!client||supabaseChannel||!navigator.onLine||document.visibilityState==='hidden')return;
+ // O postgres_changes do meta é a fonte principal. Removido broadcast duplicado e Presence desnecessário.
+ supabaseChannel=client.channel('ccpb-v7-wms-live',{config:{broadcast:{self:false}}})
   .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload)})
   .on('postgres_changes',{event:'UPDATE',schema:'public',table:CLOUD_TABLE,filter:`id=eq.${CLOUD_META_ID}`},payload=>{const env=payload?.new?.dados;if(env?.clientId!==CLIENT_ID)scheduleRealtimePull(20,env)})
-  .subscribe(status=>{if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);checkRemoteStamp()}if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){clearTimeout(realtimeReconnectTimer);realtimeReconnectTimer=setTimeout(async()=>{await stopSupabaseRealtime();startSupabaseRealtime()},1000)}});
+  .subscribe(status=>{
+   realtimeConnected=status==='SUBSCRIBED';
+   if(status==='SUBSCRIBED'){clearTimeout(realtimeReconnectTimer);checkRemoteStamp()}
+   if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED'){
+    realtimeConnected=false;clearTimeout(realtimeReconnectTimer);
+    if(document.visibilityState==='visible'&&navigator.onLine)realtimeReconnectTimer=setTimeout(async()=>{await stopSupabaseRealtime();startSupabaseRealtime()},3000)
+   }
+  });
 }
-async function stopSupabaseRealtime(){if(supabaseChannel&&supabaseClient){try{await supabaseClient.removeChannel(supabaseChannel)}catch(e){}}supabaseChannel=null}
+async function stopSupabaseRealtime(){realtimeConnected=false;if(supabaseChannel&&supabaseClient){try{await supabaseClient.removeChannel(supabaseChannel)}catch(e){}}supabaseChannel=null}
 async function supabaseTest(){const pulled=await supabasePull(true);if(!pulled)return false;return await supabasePush(true)}
 let inactivityTimer=null;const INACTIVITY_MS=10*60*1000;function resetInactivity(){if(!session)return;clearTimeout(inactivityTimer);inactivityTimer=setTimeout(()=>{if(session){log('LOGOUT',{motivo:'Inatividade de 10 minutos'},'auth');toast('Sessão encerrada por inatividade.','error');logout()}},INACTIVITY_MS)}function startInactivityWatch(){['click','keydown','touchstart','pointerdown','scroll'].forEach(ev=>document.addEventListener(ev,resetInactivity,{passive:true}));resetInactivity()}
 async function init(){
@@ -705,16 +714,31 @@ async function init(){
  $('#sidebar').addEventListener('click',e=>{if(innerWidth<=1024&&e.target.closest('button'))setMobileMenu(false)});
  addEventListener('resize',()=>{if(innerWidth>1024)setMobileMenu(false)});
  $('#globalSearchBtn').onclick=globalSearch;startInactivityWatch();
- document.addEventListener('click',e=>{if(e.target.closest('button')){scheduleActionSync(80);setTimeout(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},250)}});
+ document.addEventListener('click',e=>{if(e.target.closest('button')){scheduleActionSync(300);setTimeout(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},600)}});
  let deferredInstallPrompt=null;
  addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstallPrompt=e;$('#installAppBtn')?.classList.remove('hidden')});
  if($('#installAppBtn'))$('#installAppBtn').onclick=async()=>{if(!deferredInstallPrompt){toast('Use o menu do navegador e escolha Instalar aplicativo ou Adicionar à tela inicial.');return}deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$('#installAppBtn').classList.add('hidden')};
  addEventListener('appinstalled',()=>{$('#installAppBtn')?.classList.add('hidden');toast('CCPB instalado com sucesso.','ok')});
  $('#towerFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importTower(f)};
- addEventListener('online',()=>{onlineUpdate();if(localChangesPending)queueSupabasePush(0);else checkRemoteStamp()});addEventListener('offline',onlineUpdate);addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
+ addEventListener('online',()=>{onlineUpdate();if(document.visibilityState==='visible')startSupabaseRealtime();if(localChangesPending)queueSupabasePush(0);else checkRemoteStamp()});
+ addEventListener('offline',()=>{onlineUpdate();stopSupabaseRealtime()});
+ document.addEventListener('visibilitychange',()=>{
+  clearTimeout(hiddenRealtimeTimer);
+  if(document.visibilityState==='visible'){
+   if(navigator.onLine){startSupabaseRealtime();if(localChangesPending)queueSupabasePush(0);else checkRemoteStamp()}
+  }else{
+   // Aba/app em segundo plano por 2 minutos deixa de receber tráfego; ao voltar atualiza imediatamente.
+   hiddenRealtimeTimer=setTimeout(()=>stopSupabaseRealtime(),120000);
+  }
+ });
+ addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
- setInterval(()=>{if(navigator.onLine&&!localChangesPending)checkRemoteStamp()},5000);setInterval(()=>{if(navigator.onLine&&localChangesPending)queueSupabasePush(0)},350);setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},250);setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
+ // Polling é somente contingência: com Realtime conectado não consulta o meta repetidamente.
+ setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&!localChangesPending&&!realtimeConnected)checkRemoteStamp()},60000);
+ setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&localChangesPending&&!queueSupabasePush.timer)queueSupabasePush(900)},2000);
+ setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},600);
+ setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
 
