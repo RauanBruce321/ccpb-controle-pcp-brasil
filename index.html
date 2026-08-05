@@ -201,7 +201,7 @@ let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
 let supabaseClient=null,supabaseChannel=null,cloudApplying=false,cloudSyncInFlight=false,cloudSyncQueued=false,cloudPullInFlight=false;
 let realtimeChannel=null,realtimePullTimer=null,realtimeReconnectTimer=null,realtimeStarted=false,realtimeConnecting=false,lightPollInFlight=false;
 let realtimeConnected=false,hiddenRealtimeTimer=null;
-let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0,pendingSystemReset=false;
+let localChangesPending=false,lastSuccessfulPushAt=0,lastKnownRemoteStamp=0,pendingSystemReset=false,deferredRemoteEnvelope=null;
 const cloudHashes=new Map();
 const localHashes=new Map();
 const localIdsByGroup=new Map();
@@ -488,13 +488,6 @@ function mergeCloudState(local,remote){
  merged.version=VERSION;
  return merged;
 }
-function initSupabase(){
- try{
-  if(!window.supabase?.createClient)throw new Error('Biblioteca Supabase não foi carregada.');
-  if(!supabaseClient)supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
-  return supabaseClient;
- }catch(e){supabaseClient=null;console.error('CCPB: falha ao iniciar Supabase.',e);return null}
-}
 function cloudEnabled(){return true}
 let lastUIInteractionAt=0;
 ['pointerdown','touchstart','wheel','scroll','keydown','input'].forEach(ev=>document.addEventListener(ev,()=>{lastUIInteractionAt=Date.now()},{passive:true,capture:true}));
@@ -633,8 +626,17 @@ async function applyRemoteEnvelope(envelope){
  if(!envelope||envelope.clientId===CLIENT_ID)return true;
  const envelopeKey=`${envelope.clientId||'remote'}:${envelope.revision||envelope.at||0}`;
  if(processedSyncEnvelopes.has(envelopeKey))return true;
+ // Se há alteração local ainda não enviada, primeiro conclui o push e só depois aplica a nuvem.
+ // Isso evita que um evento remoto apague uma bipagem recém-feita neste aparelho.
+ if(localChangesPending||cloudSyncInFlight){
+  const currentRevision=Number(deferredRemoteEnvelope?.revision||deferredRemoteEnvelope?.at||0);
+  const incomingRevision=Number(envelope.revision||envelope.at||0);
+  if(!deferredRemoteEnvelope||incomingRevision>=currentRevision)deferredRemoteEnvelope=envelope;
+  if(localChangesPending)queueSupabasePush(0);
+  return true;
+ }
  processedSyncEnvelopes.add(envelopeKey);if(processedSyncEnvelopes.size>1000)processedSyncEnvelopes.delete(processedSyncEnvelopes.values().next().value);
- if(cloudPullInFlight||cloudSyncInFlight){scheduleRealtimePull(100,envelope);return true}
+ if(cloudPullInFlight){scheduleRealtimePull(100,envelope);return true}
  const client=initSupabase();if(!client)return false;cloudPullInFlight=true;
  try{
   if(envelope.reset){
@@ -671,15 +673,22 @@ async function supabasePush(silent=false){
   if(pendingLiveEvents.length){const events=pendingLiveEvents.splice(0);for(const evt of events)await broadcastLiveEvent(evt)}
   if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');return true;
  }catch(e){localChangesPending=true;console.error('CCPB V7: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
- finally{cloudSyncInFlight=false;if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),900)}}
+ finally{
+  cloudSyncInFlight=false;
+  if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),900)}
+  else if(deferredRemoteEnvelope){const env=deferredRemoteEnvelope;deferredRemoteEnvelope=null;setTimeout(()=>applyRemoteEnvelope(env),30)}
+ }
 }
 async function supabasePull(force=false){
  if(!cloudEnabled()||!navigator.onLine)return false;if(cloudPullInFlight||cloudSyncInFlight)return true;if(localChangesPending&&!force)return true;const client=initSupabase();if(!client)return false;cloudPullInFlight=true;
+ const hadLocalChanges=localChangesPending;
  try{
   await migrateLegacyIfNeeded(client);const remote=emptyState();for(const group of CLOUD_GROUPS){const rows=await fetchTable(client,group);rememberGroup(group,rows);if(CLOUD_SINGLETONS.has(group))remote[group]=rows.find(r=>r.id===cloudRowId(group,'principal'))?.dados??(group==='users'?DEFAULT_USERS:emptyState().config);else remote[group]=rows.map(r=>r.dados).filter(Boolean)}
   const {data:meta}=await client.from(CLOUD_TABLE).select('dados').eq('id',CLOUD_META_ID).maybeSingle();lastCloudRevision=Math.max(lastCloudRevision,Number(meta?.dados?.revision||0));
   remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7.1',lastSync:new Date().toISOString()};
-  cloudApplying=true;state=localChangesPending?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();localChangesPending=false;rebuildCache();initializeLocalTracking();await persistLocalState();if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}refreshCurrentViewPreservingState();return true;
+  cloudApplying=true;state=hadLocalChanges?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();rebuildCache();initializeLocalTracking();
+  if(hadLocalChanges){localChangesPending=true;collectLocalChanges()}else localChangesPending=false;
+  await persistLocalState();if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}refreshCurrentViewPreservingState();if(hadLocalChanges)queueSupabasePush(0);return true;
  }catch(e){console.error('CCPB V7: falha ao carregar Supabase.',e);return false}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 function startSupabaseRealtime(){
@@ -746,9 +755,9 @@ async function init(){
  addEventListener('storage',e=>{if(e.key==='ccpb_live_event'&&e.newValue){try{const evt=JSON.parse(e.newValue);showLiveEvent(evt)}catch(_){}}});onlineUpdate();startSupabaseRealtime();
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
- // Polling é somente contingência: com Realtime conectado não consulta o meta repetidamente.
- setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&!localChangesPending&&!cloudSyncInFlight&&!cloudPullInFlight)checkRemoteStamp()},2500);
- setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&localChangesPending&&!queueSupabasePush.timer)queueSupabasePush(900)},2000);
+ // Polling é somente contingência. Com Realtime conectado não faz consultas periódicas ao meta.
+ setInterval(()=>{if(!realtimeConnected&&navigator.onLine&&document.visibilityState==='visible'&&!localChangesPending&&!cloudSyncInFlight&&!cloudPullInFlight)checkRemoteStamp()},12000);
+ setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&localChangesPending&&!queueSupabasePush.timer)queueSupabasePush(900)},3000);
  setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},600);
  setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
