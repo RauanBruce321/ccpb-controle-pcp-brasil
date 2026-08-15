@@ -507,7 +507,7 @@ function liveMessage(evt){const d=evt?.detail||{},op=evt?.operator||'Operação'
 function showLiveEvent(evt){if(!evt?.id||receivedLiveEventIds.has(evt.id)||evt.clientId===CLIENT_ID)return;receivedLiveEventIds.add(evt.id);if(receivedLiveEventIds.size>500){const first=receivedLiveEventIds.values().next().value;receivedLiveEventIds.delete(first)}toast(liveMessage(evt),'ok');try{if(document.visibilityState==='visible'&&navigator.vibrate)navigator.vibrate([80,40,80])}catch(_){}}
 async function broadcastLiveEvent(evt){if(!evt)return;evt.clientId=CLIENT_ID;evt.sentAt=Date.now();try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-action',payload:evt})}catch(e){console.warn('CCPB: falha no aviso em tempo real.',e)}try{localStorage.setItem('ccpb_live_event',JSON.stringify(evt));localStorage.removeItem('ccpb_live_event')}catch(_){}}
 function has(p){return session?.user?.permissions?.includes(p)||session?.user?.role==='admin'}
-function log(action,detail={},module=currentPage||'system'){const entry={id:crypto.randomUUID(),at:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR'),time:new Date().toLocaleTimeString('pt-BR'),username:session?.user?.username||'sistema',operator:session?.operator||session?.user?.name||'Sistema',role:roleLabel(session?.user?.role)||'Sistema',module,moduleName:moduleLabel(module),action,actionName:actionLabel(action),detail,detailText:'',device:deviceLabel()};entry.detailText=detailText(entry);state.logs.unshift(entry);if(LIVE_ACTIONS.has(action))pendingLiveEvents.push(safeClone(entry));if(state.logs.length>30000)state.logs.length=30000;saveState()}
+function log(action,detail={},module=currentPage||'system'){const entry={id:crypto.randomUUID(),at:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR'),time:new Date().toLocaleTimeString('pt-BR'),username:session?.user?.username||'sistema',operator:session?.operator||session?.user?.name||'Sistema',role:roleLabel(session?.user?.role)||'Sistema',module,moduleName:moduleLabel(module),action,actionName:actionLabel(action),detail,detailText:'',device:deviceLabel()};entry.detailText=detailText(entry);state.logs.unshift(entry);if(LIVE_ACTIONS.has(action)){const live=safeClone(entry);if(supabaseChannel&&realtimeConnected)broadcastLiveEvent(live);else pendingLiveEvents.push(live)}if(state.logs.length>30000)state.logs.length=30000;saveState()}
 function statusOfNote(rows){const total=rows.length,received=rows.filter(r=>r.receivedAt).length,triaged=rows.filter(r=>r.triagedAt).length,released=rows.filter(r=>r.releasedAt).length,inBolsao=rows.some(r=>r.inBolsao&&!r.releasedAt);if(released===total&&total)return'Retirada';if(inBolsao&&triaged<total)return'No Bolsão';if(triaged===total&&total)return'Aguardando Assistente';if(triaged)return received<total?'Aguardando complemento':'Em triagem';if(received===total&&total)return'Aguardando triagem';if(received)return'Parcialmente recebida';return'A caminho'}
 function noteSummary(note,rows=cache.byNote.get(norm(note))||[]){const masters=uniq(rows.map(r=>r.master)),bases=uniq(rows.map(r=>r.base)),fcs=uniq(rows.map(r=>r.fc));const total=rows.length,received=rows.filter(r=>r.receivedAt).length,triaged=rows.filter(r=>r.triagedAt).length,released=rows.filter(r=>r.releasedAt).length;const promises=rows.map(r=>r.promiseDate).filter(Boolean).sort();return{note:rows[0]?.note||note,masters,bases,fcs,total,received,triaged,released,missingReceipt:total-received,missingTriage:total-triaged,position:rows.find(r=>r.inBolsao&&!r.releasedAt)?'BOLSÃO':(rows.find(r=>r.position)?.position||''),promiseDate:promises[0]||'',status:statusOfNote(rows),pct:total?Math.round(triaged/total*100):0}}
 function allNotes(){return[...cache.byNote.entries()].map(([n,rows])=>noteSummary(n,rows))}
@@ -543,10 +543,13 @@ async function login(e){e.preventDefault();const u=norm($('#loginUser').value),p
 function enterApp(){document.body.classList.toggle('dark',(localStorage.getItem('ccpb_theme')||'light')==='dark');resetInactivity();$('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#operatorLabel').textContent=session.operator;$('#roleLabel').textContent=session.user.name;$('#avatar').textContent=session.operator.split(/\s+/).map(x=>x[0]).join('').slice(0,2).toUpperCase();$('#shiftBadge').textContent=shiftOf();renderNav();const first=allowedPages()[0]?.[0]||'leadership';openPage(first)}
 function logout(){document.body.classList.remove('dark');clearTimeout(inactivityTimer);log('LOGOUT',{},'auth');sessionStorage.removeItem('ccpb_session');session=null;$('#appView').classList.add('hidden');$('#loginView').classList.remove('hidden');$('#loginPass').value='';$('#operatorName').value='';$('#operatorNameWrap').classList.add('hidden')}
 
-function kpi(label,value){return`<div class="kpi"><strong>${Number(value||0).toLocaleString('pt-BR')}</strong><span>${label}</span></div>`}
+function kpi(label,value){return`<div class="kpi" data-kpi-label="${escapeHtml(label)}"><strong>${Number(value||0).toLocaleString('pt-BR')}</strong><span>${label}</span></div>`}
 function head(title,desc,actions=''){return`<div class="section-head"><div><h2>${title}</h2><p>${desc}</p></div><div class="toolbar">${actions}</div></div>`}
 function filterTable(rows,filters,cols){return rows.filter(r=>filters.every((v,i)=>!v||String(r[cols[i].key]??'').toLowerCase().includes(v.toLowerCase())))}
-function table(cols,rows,id='table'){return`<div class="table-wrap"><table class="data-table" id="${id}"><thead><tr>${cols.map(c=>`<th>${c.label}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${c.render?c.render(r):r[c.key]??''}</td>`).join('')}</tr>`).join('')||`<tr><td colspan="${cols.length}">Nenhum registro.</td></tr>`}</tbody></table></div>`}
+function tableRowKey(r){if(r?.awb)return'awb:'+norm(r.awb);if(r?.note)return'note:'+norm(r.note);if(r?.master)return'master:'+norm(r.master);return''}
+function attrSafe(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function tableRowHtml(cols,r){const key=tableRowKey(r);return`<tr${key?` data-row-key="${attrSafe(key)}"`:''}>${cols.map(c=>`<td>${c.render?c.render(r):r[c.key]??''}</td>`).join('')}</tr>`}
+function table(cols,rows,id='table'){return`<div class="table-wrap"><table class="data-table" id="${id}"><thead><tr>${cols.map(c=>`<th>${c.label}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>tableRowHtml(cols,r)).join('')||`<tr><td colspan="${cols.length}">Nenhum registro.</td></tr>`}</tbody></table></div>`}
 function filterBar(cols,prefix){const wanted=cols.map((c,i)=>({c,i})).filter(x=>/Master|Nota|AWB|FC|Data|Base|Status|Posição/i.test(x.c.label));return`<div class="excel-filter-bar">${wanted.map(x=>`<div class="excel-filter" id="${prefix}fx${x.i}"><button type="button" class="btn subtle excel-filter-btn" data-index="${x.i}"><span>${x.c.label}</span><b>▼</b></button><div class="excel-filter-menu"><input class="excel-filter-search" placeholder="Pesquisar ${x.c.label}"><div class="excel-filter-actions"><button type="button" class="btn subtle excel-all">Todos</button><button type="button" class="btn subtle excel-none">Limpar</button></div><div class="excel-filter-values"></div></div></div>`).join('')}</div>`}
 
 function renderTower(){const recs=cache.records,notes=allNotes(),masters=[...cache.byMaster.values()].map(x=>masterSummary(x[0].master,x));const pending=recs.filter(r=>!r.receivedAt);const bases={};recs.forEach(r=>bases[r.base]=(bases[r.base]||0)+1);const overdue=notes.filter(n=>n.promiseDate&&n.promiseDate<new Date().toISOString().slice(0,10)&&n.status!=='Retirada').length;$('#content').innerHTML=head('Torre de Controle','Importação acumulativa e análise de tudo que está seguindo para TZX',`${has('tower.import')?'<button class="btn primary" id="importBtn">Importar Excel</button>':''}<button class="btn subtle" id="modelBtn">Baixar modelo</button>${has('tower.download')?'<button class="btn subtle" id="towerDownload">Baixar relação</button>':''}`)+`<div class="kpi-grid">${kpi('AWBs lançadas',recs.length)}${kpi('Masters',masters.length)}${kpi('Notas',notes.length)}${kpi('AWBs pendentes de TZX',pending.length)}${kpi('Bases de origem',Object.keys(bases).length)}${kpi('AWBs recebidas',recs.filter(r=>r.receivedAt).length)}${kpi('Notas vencidas',overdue)}${kpi('Notas em posições',notes.filter(n=>n.position&&n.position!=='BOLSÃO').length)}${kpi('AWBs no Bolsão',bolsaoCount())}</div><div id="importPanel" class="panel hidden"><div class="panel-head"><h3>Processamento do arquivo</h3><span id="importText">Aguardando...</span></div><div class="panel-body"><div class="import-progress"><i id="importBar"></i></div><div id="importValidation" style="margin-top:12px;font-size:11px"></div></div></div>${has('tower.charts')?`<div class="grid-2"><div class="panel"><div class="panel-head"><h3>AWBs por base</h3></div><div class="panel-body chart-wrap"><canvas id="towerBaseChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Recebido x pendente</h3></div><div class="panel-body chart-wrap"><canvas id="towerStatusChart"></canvas></div></div></div>`:''}<div class="panel"><div class="panel-head"><h3>Relação geral de lançamentos</h3><span>${recs.length.toLocaleString('pt-BR')} linhas</span></div>${filterBar(TOWER_COLS,'tower')}${table(TOWER_COLS,recs.slice(0,3000),'towerTable')}</div>`;
@@ -640,7 +643,7 @@ function promptReleaseCode(){const note=$('#removeBtn')?.dataset.note||'';if(!no
 async function releaseNote(note,code){const rel=state.releases.find(x=>x.note===note&&x.code===norm(code)&&!x.usedAt&&new Date(x.expiresAt)>new Date());if(!rel){toast('Código inválido ou expirado.','error');return}const rows=cache.byNote.get(norm(note))||[];if(rows.some(r=>!r.triagedAt)){toast('A Nota ainda possui AWBs pendentes.','error');return}const ts=new Date().toISOString();rows.forEach(r=>{r.releasedAt=ts;r.releasedBy=session.operator;r.releasedUser=session.user.username;r.status='RELEASED'});rel.usedAt=ts;rel.usedBy=session.operator;log('RETIROU_NOTA',{note,position:rows[0]?.position,code},'triage');await saveState(true);closeModal();toast('Nota retirada e posição liberada.','ok');triageMobileLast=null;renderTriage()}
 
 function noteCard(n){return`<div class="note-card" data-note="${n.note}"><strong>${n.note}</strong><p>${n.triaged}/${n.total} triadas • ${n.missingReceipt} faltando receber</p><span class="status ${n.status==='Retirada'?'released':n.status==='Aguardando Assistente'?'complete':n.status==='No Bolsão'?'bolsao':'pending'}">${n.status}</span></div>`}
-function renderAssistant(){const notes=allNotes().filter(n=>n.received||n.triaged);$('#content').innerHTML=head('Assistente Operacional','Conferência das Notas, Bolsão e geração do código de liberação','<button class="btn success" id="bolsaoBtn">Lançar no Bolsão</button>')+`<div class="kpi-grid">${kpi('Notas em acompanhamento',notes.length)}${kpi('Notas completas',notes.filter(n=>n.triaged===n.total&&n.total).length)}${kpi('Aguardando complementos',notes.filter(n=>n.missingReceipt>0).length)}${kpi('AWBs no Bolsão',bolsaoCount())}</div><div class="panel"><div class="filter-row"><input id="assistantSearch" placeholder="Nota, Master, AWB ou FC"><select id="assistantDate"><option value="">Todas as datas</option>${uniq(notes.map(n=>n.promiseDate)).sort().map(x=>`<option value="${x}">${dateBR(x)}</option>`).join('')}</select><select id="assistantBase"><option value="">Todas as bases</option>${uniq(notes.flatMap(n=>n.bases)).sort().map(x=>`<option>${x}</option>`).join('')}</select><select id="assistantStatus"><option value="">Todos os status</option>${uniq(notes.map(n=>n.status)).map(x=>`<option value="${x}">${statusLabel(x)}</option>`).join('')}</select></div><div id="assistantCards" class="panel-body note-cards"></div></div>`;const refresh=()=>{const q=$('#assistantSearch').value.toLowerCase(),dt=$('#assistantDate').value,ba=$('#assistantBase').value,st=$('#assistantStatus').value;$('#assistantCards').innerHTML=notes.filter(n=>(!q||JSON.stringify(n).toLowerCase().includes(q))&&(!dt||n.promiseDate===dt)&&(!ba||n.bases.includes(ba))&&(!st||n.status===st)).map(noteCard).join('');$$('.note-card').forEach(x=>x.onclick=()=>openNoteModal(x.dataset.note,true))};['assistantSearch','assistantDate','assistantBase','assistantStatus'].forEach(id=>{const e=$('#'+id);e.oninput=refresh;e.onchange=refresh});$('#bolsaoBtn').onclick=openBolsaoModal;refresh()}
+function renderAssistant(){const notes=allNotes().filter(n=>(n.received||n.triaged)&&n.status!=='Retirada');$('#content').innerHTML=head('Assistente Operacional','Conferência das Notas, Bolsão e geração do código de liberação','<button class="btn success" id="bolsaoBtn">Lançar no Bolsão</button>')+`<div class="kpi-grid">${kpi('Notas em acompanhamento',notes.length)}${kpi('Notas completas',notes.filter(n=>n.status==='Aguardando Assistente').length)}${kpi('Aguardando complementos',notes.filter(n=>n.missingReceipt>0).length)}${kpi('AWBs no Bolsão',bolsaoCount())}</div><div class="panel"><div class="filter-row"><input id="assistantSearch" placeholder="Nota, Master, AWB ou FC"><select id="assistantDate"><option value="">Todas as datas</option>${uniq(notes.map(n=>n.promiseDate)).sort().map(x=>`<option value="${x}">${dateBR(x)}</option>`).join('')}</select><select id="assistantBase"><option value="">Todas as bases</option>${uniq(notes.flatMap(n=>n.bases)).sort().map(x=>`<option>${x}</option>`).join('')}</select><select id="assistantStatus"><option value="">Todos os status</option>${uniq(notes.map(n=>n.status)).map(x=>`<option value="${x}">${statusLabel(x)}</option>`).join('')}</select></div><div id="assistantCards" class="panel-body note-cards"></div></div>`;const refresh=()=>{const q=$('#assistantSearch').value.toLowerCase(),dt=$('#assistantDate').value,ba=$('#assistantBase').value,st=$('#assistantStatus').value;$('#assistantCards').innerHTML=notes.filter(n=>(!q||JSON.stringify(n).toLowerCase().includes(q))&&(!dt||n.promiseDate===dt)&&(!ba||n.bases.includes(ba))&&(!st||n.status===st)).map(noteCard).join('');$$('.note-card').forEach(x=>x.onclick=()=>openNoteModal(x.dataset.note,true))};['assistantSearch','assistantDate','assistantBase','assistantStatus'].forEach(id=>{const e=$('#'+id);e.oninput=refresh;e.onchange=refresh});$('#bolsaoBtn').onclick=openBolsaoModal;refresh()}
 function openBolsaoModal(){openModal('Lançar no Bolsão',`<p>Digite a posição. O sistema mostrará somente as Notas que estão nela.</p><div class="bolsao-position-row"><label>Posição<input id="bolsaoPosition" autocomplete="off" placeholder="Digite ou bipe a posição"></label><button id="findBolsao" class="btn primary">Localizar Notas</button></div><div id="bolsaoNotes" class="bolsao-list"><small>Informe uma posição para consultar.</small></div><button id="confirmBolsao" class="btn success" style="margin-top:14px" disabled>Confirmar lançamento no Bolsão</button>`);const load=()=>{const pos=norm($('#bolsaoPosition').value);const notes=allNotes().filter(n=>norm(n.position)===pos&&n.status!=='Retirada'&&n.status!=='No Bolsão');$('#bolsaoNotes').innerHTML=notes.length?notes.map(n=>`<label class="check-card"><input type="checkbox" class="bolsaoNote" value="${n.note}"><span><b>Nota ${n.note}</b><br><small>${n.triaged}/${n.total} triadas • ${n.missingReceipt} faltando receber</small></span></label>`).join(''):'<div class="bolsao-banner">Nenhuma Nota encontrada nesta posição.</div>';$('#confirmBolsao').disabled=!notes.length;$$('.bolsaoNote').forEach(x=>x.onchange=()=>$('#confirmBolsao').disabled=!$$('.bolsaoNote:checked').length)};$('#findBolsao').onclick=load;$('#bolsaoPosition').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();load()}};$('#confirmBolsao').onclick=async()=>{const pos=norm($('#bolsaoPosition').value),selected=$$('.bolsaoNote:checked').map(x=>x.value);if(!pos||!selected.length){toast('Digite a posição e marque pelo menos uma Nota.','error');return}selected.forEach(note=>(cache.byNote.get(norm(note))||[]).filter(r=>r.triagedAt&&!r.releasedAt).forEach(r=>{r.originalPosition=r.originalPosition||r.position||pos;r.inBolsao=true;r.position='';r.status='BOLSAO'}));rebuildCache();log('LANÇOU_BOLSAO',{position:pos,notes:selected},'assistant');await saveState(true);closeModal();toast(`${selected.length} Nota(s) lançada(s) no Bolsão.`,'ok');renderAssistant()}}
 function promptReleaseCodeForNote(note){if(!note)return;openModal('Retirar Nota',`<p>Informe ou bipa o código gerado pelo Assistente para a Nota <b>${note}</b>.</p><input id="releaseInput" class="scan-input" autofocus><button id="releaseConfirm" class="btn success" style="margin-top:12px">Confirmar retirada</button>`);$('#releaseConfirm').onclick=()=>releaseNote(note,$('#releaseInput').value)}
 function openNoteModal(note,assistantMode=false,triageMode=false){const n=noteSummary(note),rows=cache.byNote.get(norm(note))||[];const complete=n.triaged===n.total&&n.total>0&&n.missingReceipt===0;const alreadyReleased=rows.every(r=>r.releasedAt);const canRelease=assistantMode&&has('assistant.generateRelease')&&complete&&!alreadyReleased;const canWithdraw=triageMode&&has('triage.scanRelease')&&complete&&!alreadyReleased;const historyRows=state.logs.filter(l=>JSON.stringify(l.detail).includes(n.note)).slice(0,200).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));openModal(`Nota ${n.note}`,`<div class="kpi-grid">${kpi('Previstas',n.total)}${kpi('Recebidas',n.received)}${kpi('Triadas',n.triaged)}${kpi('Faltando receber',n.missingReceipt)}</div><div class="grid-2"><div class="panel-body"><p><b>Masters:</b> ${n.masters.join(' - ')}</p><p><b>Base:</b> ${n.bases.join(' - ')}</p><p><b>FC:</b> ${n.fcs.join(' - ')}</p><p><b>Data promessa:</b> ${dateBR(n.promiseDate)}</p><p><b>Posição:</b> ${n.position||'Não cadastrada'}</p><p><b>Status:</b> ${n.status}</p></div><div id="qrArea" class="panel-body" style="text-align:center"></div></div>${canRelease?'<button id="generateRelease" class="btn success">Gerar QR Code de liberação</button>':''}${canWithdraw?'<button id="withdrawFromCard" class="btn success" style="margin-top:10px">Retirar Nota com código do Assistente</button>':''}${assistantMode||triageMode?'':`<div class="panel"><div class="panel-head"><h3>Histórico da Nota</h3></div>${table([{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Módulo',key:'moduleName'},{label:'Movimentação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}],historyRows)}</div>`}`);if($('#generateRelease'))$('#generateRelease').onclick=()=>generateRelease(n.note);if($('#withdrawFromCard'))$('#withdrawFromCard').onclick=()=>{closeModal();const rb=$('#removeBtn');if(rb){rb.dataset.note=n.note;promptReleaseCode()}else promptReleaseCodeForNote(n.note)}}
@@ -917,7 +920,7 @@ function restoreViewState(v){
   if(v.activeKey){const el=document.getElementById(v.activeKey)||document.querySelector(`[name="${CSS.escape(v.activeKey)}"]`);if(el){el.focus({preventScroll:true});const saved=savedMap.get(v.activeKey);if(saved&&saved.start!==null&&el.setSelectionRange)try{el.setSelectionRange(saved.start,saved.end)}catch(_){}}}
  });
 }
-function canRefreshCurrentView(){if(currentPage==='triage'&&triagePending)return false;if(Date.now()-lastUIInteractionAt<900)return false;return !hasOpenModal()&&!hasOpenFilter()}
+function canRefreshCurrentView(){if(currentPage==='triage'&&triagePending)return false;if(Date.now()-lastUIInteractionAt<250)return false;return !hasOpenModal()&&!hasOpenFilter()}
 let pendingVisualRefresh=false,visualRefreshScheduled=false,visualRefreshRunning=false;
 function performVisualRefresh(){
  if(!session||!currentPage)return;
@@ -936,6 +939,59 @@ function scheduleVisualRefresh(){
  visualRefreshScheduled=true;
  requestAnimationFrame(()=>{visualRefreshScheduled=false;performVisualRefresh()});
 }
+
+function setKpiFast(label,value){
+ const el=[...document.querySelectorAll('[data-kpi-label]')].find(x=>x.dataset.kpiLabel===label);
+ if(el){const s=el.querySelector('strong');if(s)s.textContent=Number(value||0).toLocaleString('pt-BR')}
+}
+function updateLeadershipChartsFast(notes){
+ if(!has('leadership.charts'))return;
+ const recs=cache.records;
+ if(charts.leadFlow){
+  charts.leadFlow.data.datasets[0].data=[recs.length,recs.filter(r=>r.receivedAt).length,recs.filter(r=>r.triagedAt).length,recs.filter(r=>r.releasedAt).length];
+  charts.leadFlow.update('none');
+ }
+ if(charts.leadNotes){
+  const st={};notes.forEach(n=>st[n.status]=(st[n.status]||0)+1);
+  charts.leadNotes.data.labels=Object.keys(st);charts.leadNotes.data.datasets[0].data=Object.values(st);charts.leadNotes.update('none');
+ }
+ if(charts.leadBases){
+  const b={};recs.forEach(r=>b[r.base]=(b[r.base]||0)+1);
+  charts.leadBases.data.labels=Object.keys(b).slice(0,20);charts.leadBases.data.datasets[0].data=Object.values(b).slice(0,20);charts.leadBases.update('none');
+ }
+}
+function fastRefreshLeadership(changedRecords=[]){
+ if(currentPage!=='leadership'||!$('#panelallTable'))return false;
+ const recs=cache.records,notes=allNotes(),masters=[...cache.byMaster.entries()].map(([m,r])=>masterSummary(m,r)),today=new Date().toISOString().slice(0,10);
+ setKpiFast('AWBs a caminho',recs.filter(r=>!r.receivedAt).length);
+ setKpiFast('AWBs recebidas',recs.filter(r=>r.receivedAt).length);
+ setKpiFast('AWBs triadas',recs.filter(r=>r.triagedAt).length);
+ setKpiFast('Masters pendentes',masters.filter(m=>m.received<m.total).length);
+ setKpiFast('Notas totais',notes.length);
+ setKpiFast('Notas completas',notes.filter(n=>n.triaged===n.total&&n.total).length);
+ setKpiFast('Aguardando complementos',notes.filter(n=>n.missingReceipt>0&&(n.position||n.status==='No Bolsão')).length);
+ setKpiFast('Notas retiradas',notes.filter(n=>n.status==='Retirada').length);
+ setKpiFast('AWBs no Bolsão',bolsaoCount());
+ setKpiFast('Posições ocupadas',uniq(recs.filter(r=>r.position&&!r.inBolsao&&!r.releasedAt).map(r=>r.position)).length);
+ setKpiFast('Vencendo hoje',notes.filter(n=>n.promiseDate===today&&n.status!=='Retirada').length);
+ setKpiFast('Notas vencidas',notes.filter(n=>n.promiseDate&&n.promiseDate<today&&n.status!=='Retirada').length);
+ updateLeadershipChartsFast(notes);
+
+ const tbody=$('#panelallTable tbody');
+ if(tbody&&changedRecords.length){
+  const unique=new Map(changedRecords.filter(Boolean).map(r=>[norm(r.awb),r]));
+  for(const r of unique.values()){
+   const key='awb:'+norm(r.awb);
+   const row=[...tbody.querySelectorAll('tr[data-row-key]')].find(tr=>tr.dataset.rowKey===key);
+   if(row)row.outerHTML=tableRowHtml(TOWER_COLS,r);
+   else tbody.insertAdjacentHTML('beforeend',tableRowHtml(TOWER_COLS,r));
+  }
+ }
+ const count=$('#panelallTable')?.closest('.panel')?.querySelector('.panel-head span');
+ if(count)count.textContent=`${recs.length.toLocaleString('pt-BR')} AWBs — relação completa`;
+ return true;
+}
+
 function refreshCurrentViewPreservingState(){scheduleVisualRefresh()}
 
 function forceVisualRefresh(){
@@ -1027,6 +1083,7 @@ function applyRowsToState(group,rows,deletedIds=[]){
 }
 async function applyRemoteEnvelope(envelope){
  if(!envelope||envelope.clientId===CLIENT_ID)return true;
+ const realtimeChangedRecords=[];
  const envelopeKey=`${envelope.clientId||'remote'}:${envelope.revision||envelope.at||0}`;
  if(processedSyncEnvelopes.has(envelopeKey))return true;
  // Se há alteração local ainda não enviada, primeiro conclui o push e só depois aplica a nuvem.
@@ -1049,11 +1106,13 @@ async function applyRemoteEnvelope(envelope){
   cloudApplying=true;
   for(const change of envelope.changes||[]){
    let rows=[];if(change.full)rows=await fetchTable(client,change.group);else if(change.upserts?.length)rows=await fetchIds(client,change.upserts);
+   if(change.group==='records'&&rows.length)realtimeChangedRecords.push(...rows.map(x=>x?.dados).filter(Boolean));
    applyRowsToState(change.group,rows,change.deletes||[]);
   }
   cloudApplying=false;normalizeSystemUsers();rebuildCache();initializeLocalTracking();localChangesPending=false;lastCloudRevision=Math.max(lastCloudRevision,Number(envelope.revision||Date.now()));await persistLocalState();
   if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}
-  forceVisualRefresh();return true;
+  if(!fastRefreshLeadership(realtimeChangedRecords))forceVisualRefresh();
+  return true;
  }catch(e){console.error('CCPB V7: falha na atualização incremental.',e);return supabasePull(true)}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 async function writeCloudMeta(client,envelope){const row={id:CLOUD_META_ID,dados:envelope,atualizado_em:new Date().toISOString()};const {error}=await client.from(CLOUD_TABLE).upsert(row,{onConflict:'id'});if(error)throw error}
@@ -1091,7 +1150,7 @@ async function supabasePull(force=false){
   remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7.1',lastSync:new Date().toISOString()};
   cloudApplying=true;state=hadLocalChanges?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();rebuildCache();initializeLocalTracking();
   if(hadLocalChanges){localChangesPending=true;collectLocalChanges()}else localChangesPending=false;
-  await persistLocalState();if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}refreshCurrentViewPreservingState();if(hadLocalChanges)queueSupabasePush(0);return true;
+  await persistLocalState();if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}if(!fastRefreshLeadership([]))refreshCurrentViewPreservingState();if(hadLocalChanges)queueSupabasePush(0);return true;
  }catch(e){console.error('CCPB V7: falha ao carregar Supabase.',e);return false}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 function startSupabaseRealtime(){
