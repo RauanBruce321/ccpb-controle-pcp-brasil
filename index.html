@@ -716,41 +716,34 @@ function exportNote(n){return{Nota:n.note,Masters:n.masters.join(', '),Base:n.ba
 function drawLeadership(notes){destroyChart('leadFlow');charts.leadFlow=new Chart($('#leadFlow'),{type:'bar',data:{labels:['Lançadas','Recebidas','Triadas','Retiradas'],datasets:[{data:[cache.records.length,cache.records.filter(r=>r.receivedAt).length,cache.records.filter(r=>r.triagedAt).length,cache.records.filter(r=>r.releasedAt).length],backgroundColor:['#6b7280','#2f5bc4','#7c3aed','#16a34a']}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});const st={};notes.forEach(n=>st[n.status]=(st[n.status]||0)+1);destroyChart('leadNotes');charts.leadNotes=new Chart($('#leadNotes'),{type:'doughnut',data:{labels:Object.keys(st),datasets:[{data:Object.values(st)}]},options:{responsive:true,maintainAspectRatio:false}});const b={};cache.records.forEach(r=>b[r.base]=(b[r.base]||0)+1);destroyChart('leadBases');charts.leadBases=new Chart($('#leadBases'),{type:'bar',data:{labels:Object.keys(b).slice(0,20),datasets:[{data:Object.values(b).slice(0,20),backgroundColor:'#d71920'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}})}
 function closureStatusHtml(){const key=shiftKey(),sectors=['receiving','triage','assistant'];return sectors.map(s=>{const c=state.closures.find(x=>x.shiftKey===key&&x.sector===s);const reinicio=turnoPrecisaIniciar(s);return`<span class="status ${c?'complete':'pending'}" style="margin-right:8px">${setorLabel(s)}: ${c?'encerrado por '+c.operator:reinicio?'aguardando início':'aberto'}</span>`}).join('')}
 async function closeShift(sector){const key=shiftKey();if(state.closures.some(x=>x.shiftKey===key&&x.sector===sector)){toast('Este setor já encerrou o turno.','error');return}openModal('Confirmar encerramento do turno',`<p>Digite sua senha para encerrar o <b>${key}</b>.</p><input id="shiftPassword" type="password" class="scan-input" placeholder="Senha do usuário" autofocus><button id="confirmShiftClose" class="btn danger" style="margin-top:12px">Confirmar encerramento</button>`);$('#confirmShiftClose').onclick=async()=>{if($('#shiftPassword').value!==session.user.password){toast('Senha incorreta.','error');$('#shiftPassword').select();return}state.closures.push({id:crypto.randomUUID(),shiftKey:key,sector,at:new Date().toISOString(),operator:session.operator,user:session.user.username});log('ENCERROU_TURNO',{sector,shiftKey:key},sector);await saveState(true);closeModal();toast('Turno encerrado e liderança notificada.','ok')}}
-async function archiveShift(){
- const notes=allNotes();
- const finalizedNotes=new Set(notes.filter(n=>n.status==='Retirada').map(n=>norm(n.note)));
- if(!finalizedNotes.size){
-  toast('Não há Notas finalizadas/retiradas para limpar neste turno. As pendências permanecem.','error');
-  return
- }
- const completedRecords=state.records.filter(r=>finalizedNotes.has(norm(r.note)));
- const total=completedRecords.length;
- if(!confirm(`Finalizar o turno e limpar ${finalizedNotes.size} Nota(s) já finalizada(s), totalizando ${total} AWBs?\n\nTudo que ainda estiver pendente, no Bolsão ou aguardando Assistente será mantido.`))return;
- if(!confirm('Confirme novamente: somente o que já foi FINALIZADO/RETIRADO será removido da operação atual.'))return;
-
- const archive={
-  id:crypto.randomUUID(),
-  shiftKey:shiftKey(),
-  sector:'leadership',
-  createdAt:new Date().toISOString(),
-  operator:session.operator,
-  user:session.user.username,
-  notes:finalizedNotes.size,
-  records:total
- };
- state.archives=state.archives||[];
- state.archives.unshift(archive);
-
- state.records=state.records.filter(r=>!finalizedNotes.has(norm(r.note)));
- state.releases=(state.releases||[]).filter(x=>!finalizedNotes.has(norm(x.note)));
- state.closures=[];
- state.shiftRestarts=[];
- rebuildCache();
- log('LIMPOU_TURNO',{notes:finalizedNotes.size,records:total,shiftKey:shiftKey()},'leadership');
- await saveState(true);
- scheduleActionSync(700);
- toast(`Turno finalizado: ${finalizedNotes.size} Nota(s) e ${total} AWBs concluídas foram limpas. Pendências mantidas.`,'ok');
- renderLeadership()
+async function archiveShift(){const byNote=new Map();state.records.forEach(r=>{const key=norm(r.note);if(!byNote.has(key))byNote.set(key,[]);byNote.get(key).push(r)});const completedNotes=new Set([...byNote.entries()].filter(([_,rs])=>rs.length&&rs.every(r=>r.receivedAt&&r.triagedAt)).map(([n])=>n));if(!completedNotes.size){toast('Não há Notas 100% concluídas para finalizar neste turno.','error');return}const total=state.records.filter(r=>completedNotes.has(norm(r.note))).length;if(!confirm(`Finalizar o turno e limpar ${completedNotes.size} Nota(s) concluída(s), totalizando ${total} AWBs? As pendências permanecerão.`))return;state.records=state.records.filter(r=>!completedNotes.has(norm(r.note)));state.releases=(state.releases||[]).filter(x=>!completedNotes.has(norm(x.note)));state.closures=[];state.shiftRestarts=[];rebuildCache();log('LIMPOU_TURNO',{notes:completedNotes.size,records:total},'leadership');await saveState(true);scheduleActionSync(700);toast('Turno finalizado. Tudo que ainda está pendente foi mantido para o próximo turno.','ok');renderLeadership()}
+async function clearMovementHistory(){if(!confirm('Limpar todo o histórico de movimentações? Os dados operacionais não serão apagados.'))return;state.logs=[];await saveState(true);toast('Histórico de movimentações limpo.','ok');renderLeadership()}
+function renderPositions(){
+ const today=new Date().toISOString().slice(0,10);
+ const rows=cache.records.filter(r=>r.position&&!r.inBolsao&&!r.releasedAt).map(r=>positionAwbView(r,false));
+ const notes=uniq(rows.map(r=>norm(r.note))).map(n=>noteSummary(n));
+ const occupiedPositions=uniq(rows.map(r=>r.positionNow).filter(Boolean));
+ const overdueNotes=notes.filter(n=>n.promiseDate&&n.promiseDate<today);
+ const missingAwbs=notes.reduce((s,n)=>s+n.missingReceipt,0);
+ $('#content').innerHTML=head('Ocupação','Todas as AWBs atualmente armazenadas em posições','<button class="btn subtle" id="posDownload">Baixar relação</button>')+
+ `<div class="kpi-grid kpi-grid-five">
+ ${kpi('AWBs nas posições',rows.length)}
+ ${kpi('Notas',notes.length)}
+ ${kpi('Notas vencendo / vencidas',overdueNotes.length)}
+ ${kpi('Posições ocupadas',occupiedPositions.length)}
+ ${kpi('AWBs faltantes',missingAwbs)}
+ </div>
+ <div class="panel sheet-panel">
+  <div class="panel-head"><h3>Relação Geral da Ocupação</h3><span>${rows.length.toLocaleString('pt-BR')} AWBs — sem limite</span></div>
+  ${filterBar(POSITION_AWB_COLS,'occup')}
+  ${table(POSITION_AWB_COLS,rows,'occupTable')}
+ </div>`;
+ bindColumnFilters('occup',POSITION_AWB_COLS,rows,rows.length);
+ $('#posDownload').onclick=()=>excelDownload('CCPB_Ocupacao_AWBs.xlsx',rows.map(r=>({
+  Posição:r.positionNow,AWB:r.awb,Nota:r.note,Master:r.master,Base:r.base,FC:r.fc,
+  'Data Promessa':dateBR(r.promiseDate),Recebimento:r.receivedAt?new Date(r.receivedAt).toLocaleString('pt-BR'):'',
+  Triagem:r.triagedAt?new Date(r.triagedAt).toLocaleString('pt-BR'):'','Registrado em':r.createdAt?new Date(r.createdAt).toLocaleString('pt-BR'):'',Status:r.statusView
+ })))
 }
 
 const POS_COLS=[{label:'Posição',key:'position'},{label:'Nota',key:'note'},{label:'Master(s)',key:'masters',render:n=>n.masters.join(', ')},{label:'Base',key:'bases',render:n=>n.bases.join(', ')},{label:'FC',key:'fcs',render:n=>n.fcs.join(', ')},{label:'Previstas',key:'total'},{label:'Recebidas',key:'received'},{label:'Triadas',key:'triaged'},{label:'Faltando receber',key:'missingReceipt'},{label:'Pendentes triagem',key:'missingTriage'},{label:'Data promessa',key:'promiseDate',render:n=>dateBR(n.promiseDate)},{label:'Status',key:'status'}];
