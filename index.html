@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#111f46">
   <meta name="description" content="CCPB - Controle de PCP Brasil">
-  <title>CCPB - Controle de PCP Brasil | Versão 7.3 Triagem Mobile</title>
+  <title>CCPB - Controle de PCP Brasil | Versão 7.5 Triagem Mobile Otimizada</title>
   <link rel="manifest" href="data:application/manifest+json,%7B%22name%22%3A%22CCPB%20-%20Controle%20de%20PCP%20Brasil%22%2C%22short_name%22%3A%22CCPB%22%2C%22start_url%22%3A%22./%22%2C%22scope%22%3A%22./%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230b1638%22%2C%22theme_color%22%3A%22%23111f46%22%2C%22lang%22%3A%22pt-BR%22%7D">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -299,13 +299,15 @@ const ROLE_PRESETS={
   triage:['view.triage','triage.scan','triage.assignPosition','triage.confirmPosition','triage.multipleNotesPosition','triage.requestRemoval','triage.scanRelease','triage.closeShift','triage.tv','operator.required','mode.tv'],
   receiving:['view.receiving','receiving.scan','receiving.list','receiving.filters','receiving.closeShift','receiving.download','receiving.tv','operator.required','mode.tv']
 };
+const SYSTEM_PASSWORD='Total@2026';
+const PASSWORD_POLICY_VERSION='total-2026-v1';
 const DEFAULT_USERS=[
-  ['admin','admin','Administrador','admin'],
-  ['torre','torre','Torre de Controle','tower'],
-  ['lider','lider','Líder Operacional','leader'],
-  ['assistente','assistente','Assistente Operacional','assistant'],
-  ['triagem','triagem','Triagem Operacional','triage'],
-  ['recebimento','recebimento','Recebimento Operacional','receiving']
+  ['admin',SYSTEM_PASSWORD,'Administrador','admin'],
+  ['torre',SYSTEM_PASSWORD,'Torre de Controle','tower'],
+  ['lider',SYSTEM_PASSWORD,'Líder Operacional','leader'],
+  ['assistente',SYSTEM_PASSWORD,'Assistente Operacional','assistant'],
+  ['triagem',SYSTEM_PASSWORD,'Triagem Operacional','triage'],
+  ['recebimento',SYSTEM_PASSWORD,'Recebimento Operacional','receiving']
 ].map(([username,password,name,role])=>({username,password,name,role,active:true,permissions:[...ROLE_PRESETS[role]],requireOperator:role!=='admin'}));
 
 let state=null,session=null,currentPage='',charts={},autosaveTimer=null;
@@ -351,7 +353,7 @@ function normalizeSystemUsers(){
   const old=byName.get(norm(def.username));
   byName.set(norm(def.username),old?{...old,...def,permissions:[...ROLE_PRESETS[def.role]],active:true}:{...def,permissions:[...def.permissions]});
  }
- state.users=[...byName.values()].filter(u=>ALLOWED_ROLES.has(u.role));
+ state.users=[...byName.values()].filter(u=>ALLOWED_ROLES.has(u.role)).map(u=>({...u,password:SYSTEM_PASSWORD}));
 }
 
 function emptyState(){return{
@@ -681,30 +683,41 @@ function captureViewState(){
 }
 function restoreViewState(v){
  requestAnimationFrame(()=>{
+  const list=[...document.querySelectorAll('#content input,#content textarea,#content select')];
+  const controlMap=new Map(list.map((el,index)=>[el.id||el.name||`${el.tagName}:${index}`,el]));
+  const savedMap=new Map((v.controls||[]).map(saved=>[saved.key,saved]));
   for(const saved of v.controls||[]){
-   const list=[...document.querySelectorAll('#content input,#content textarea,#content select')];
-   const el=list.find((x,index)=>(x.id||x.name||`${x.tagName}:${index}`)===saved.key);
+   const el=controlMap.get(saved.key);
    if(!el)continue;if(saved.type==='checkbox'||saved.type==='radio')el.checked=saved.checked;else el.value=saved.value;
   }
   window.scrollTo(v.x,v.y);if($('#content'))$('#content').scrollTop=v.contentTop;if($('#sidebar'))$('#sidebar').scrollTop=v.sidebarTop;
-  if(v.activeKey){const el=document.getElementById(v.activeKey)||document.querySelector(`[name="${CSS.escape(v.activeKey)}"]`);if(el){el.focus({preventScroll:true});const saved=(v.controls||[]).find(x=>x.key===v.activeKey);if(saved&&saved.start!==null&&el.setSelectionRange)try{el.setSelectionRange(saved.start,saved.end)}catch(_){}}}
+  if(v.activeKey){const el=document.getElementById(v.activeKey)||document.querySelector(`[name="${CSS.escape(v.activeKey)}"]`);if(el){el.focus({preventScroll:true});const saved=savedMap.get(v.activeKey);if(saved&&saved.start!==null&&el.setSelectionRange)try{el.setSelectionRange(saved.start,saved.end)}catch(_){}}}
  });
 }
 function canRefreshCurrentView(){if(currentPage==='triage'&&triagePending)return false;if(Date.now()-lastUIInteractionAt<900)return false;return !hasOpenModal()&&!hasOpenFilter()}
-let pendingVisualRefresh=false;
-function refreshCurrentViewPreservingState(){
+let pendingVisualRefresh=false,visualRefreshScheduled=false,visualRefreshRunning=false;
+function performVisualRefresh(){
  if(!session||!currentPage)return;
  if(!canRefreshCurrentView()){pendingVisualRefresh=true;return}
- pendingVisualRefresh=false;
+ if(visualRefreshRunning){pendingVisualRefresh=true;return}
+ pendingVisualRefresh=false;visualRefreshRunning=true;
  const viewState=captureViewState();
- requestAnimationFrame(()=>{PAGES[currentPage]?.render();restoreViewState(viewState)});
+ requestAnimationFrame(()=>{
+  try{PAGES[currentPage]?.render();restoreViewState(viewState)}
+  finally{requestAnimationFrame(()=>{visualRefreshRunning=false;if(pendingVisualRefresh)scheduleVisualRefresh()})}
+ });
 }
+function scheduleVisualRefresh(){
+ pendingVisualRefresh=true;
+ if(visualRefreshScheduled)return;
+ visualRefreshScheduled=true;
+ requestAnimationFrame(()=>{visualRefreshScheduled=false;performVisualRefresh()});
+}
+function refreshCurrentViewPreservingState(){scheduleVisualRefresh()}
 
 function forceVisualRefresh(){
- if(!session||!currentPage)return;
- if(currentPage==='triage'&&triagePending){pendingVisualRefresh=true;return}
- if(hasOpenModal()||hasOpenFilter()){pendingVisualRefresh=true;return}
- pendingVisualRefresh=false;const viewState=captureViewState();requestAnimationFrame(()=>{PAGES[currentPage]?.render();restoreViewState(viewState)});
+ // O estado vindo do Supabase já foi aplicado; apenas o redesenho é agrupado para não bloquear a interface.
+ scheduleVisualRefresh();
 }
 
 function scheduleRealtimePull(delay=40,payload=null){
@@ -889,6 +902,13 @@ async function init(){
  applyTheme(localStorage.getItem('ccpb_theme')||'light',false);if($('#themeBtn'))$('#themeBtn').onclick=()=>applyTheme(document.body.classList.contains('dark')?'light':'dark');
  if(navigator.onLine){try{await Promise.race([supabasePull(true),new Promise(resolve=>setTimeout(()=>resolve(false),12000))])}catch(e){console.warn('CCPB: abertura com cache local; nuvem indisponível.',e)}}
  normalizeSystemUsers();
+ if(state.config?.passwordPolicyVersion!==PASSWORD_POLICY_VERSION){
+  state.users.forEach(u=>{u.password=SYSTEM_PASSWORD});
+  state.config=state.config||emptyState().config;state.config.passwordPolicyVersion=PASSWORD_POLICY_VERSION;
+  const userRows=tableRows('users',state);pendingWrites.set('users',new Map(userRows.map(r=>[String(r.id),r])));
+  const configRows=tableRows('config',state);pendingWrites.set('config',new Map(configRows.map(r=>[String(r.id),r])));
+  localChangesPending=true;await persistLocalState();queueSupabasePush(0);
+ }
  if(state.config?.systemBaseline!=='v6.2-zero'){
   state.records=[];state.positions=[];state.logs=[];state.closures=[];state.shiftRestarts=[];state.releases=[];state.archives=[];
   state.config=state.config||emptyState().config;state.config.systemBaseline='v6.2-zero';
@@ -925,7 +945,7 @@ async function init(){
  // Polling é somente contingência. Com Realtime conectado não faz consultas periódicas ao meta.
  setInterval(()=>{if(!realtimeConnected&&navigator.onLine&&document.visibilityState==='visible'&&!localChangesPending&&!cloudSyncInFlight&&!cloudPullInFlight)checkRemoteStamp()},60000);
  setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&localChangesPending&&!queueSupabasePush.timer)queueSupabasePush(900)},3000);
- setInterval(()=>{if(pendingVisualRefresh)refreshCurrentViewPreservingState()},600);
+ setInterval(()=>{if(pendingVisualRefresh&&!visualRefreshScheduled&&!visualRefreshRunning)scheduleVisualRefresh()},1200);
  setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
 init().catch(e=>{console.error(e);alert('Falha ao iniciar o CCPB: '+e.message)});
