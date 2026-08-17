@@ -122,6 +122,14 @@ body.dark #loginView input{background:#fff!important;color:#111827!important;bor
 
 /* Bolsão mais limpo */
 .bolsao-position-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+.toolbar .btn.primary{width:auto;margin-top:0}
+.operation-field{width:100%;padding:10px;border:1px solid var(--line);border-radius:7px;background:#fff;font-size:14px}
+.operation-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:end}
+.operation-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.modal .operation-actions .btn.primary,.modal .bolsao-position-row .btn.primary{width:auto;margin-top:0}
+body.dark .operation-field{background:#111827!important;color:#e5e7eb!important;border-color:#263244!important}
+@media(max-width:760px){.operation-grid{grid-template-columns:1fr}.toolbar .btn{width:100%!important}.operation-actions .btn{width:100%}}
+
 .bolsao-list{display:grid;gap:8px;margin-top:14px;max-height:360px;overflow:auto}
 .bolsao-list .check-card{display:flex;align-items:center;gap:10px;padding:12px}
 @media(max-width:760px){.bolsao-position-row{grid-template-columns:1fr}.excel-filter>button{min-width:135px}.excel-filter-menu{position:fixed;left:12px;right:12px;bottom:82px;top:auto;width:auto;max-height:55vh}}
@@ -355,6 +363,7 @@ body.triage-compact .triage-mobile-main:has(.triage-complete-list)>.triage-mobil
   <div id="toastRoot" class="toast-root"></div>
   <div id="modalRoot"></div>
   <input id="towerFile" type="file" accept=".xlsx,.xls,.csv" hidden>
+  <input id="positionFile" type="file" accept=".xlsx,.xls,.csv" hidden>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
@@ -362,9 +371,9 @@ body.triage-compact .triage-mobile-main:has(.triage-complete-list)>.triage-mobil
   <script>
 'use strict';
 
-const VERSION='7.1';
-const SUPABASE_URL='https://btygliiszlagazegdunr.supabase.co';
-const SUPABASE_KEY='sb_publishable_EKPHSc_MQ8Q61Hc4KE-bYQ_-DVNsyCx';
+const VERSION='8.3';
+const SUPABASE_URL='https://jnanxpcuvwrikvodcujo.supabase.co';
+const SUPABASE_KEY='sb_publishable__gONGj4KXD9ZtS68e_U-kA_YGW55iLO';
 const SUPABASE_TABLE='ccpb';
 const SUPABASE_ROW_ID='principal';
 const SUPABASE_PREFIX='v12:';
@@ -375,7 +384,7 @@ const PERMISSIONS=[
   'view.tower','tower.import','tower.list','tower.filters','tower.download','tower.charts','tower.tv','tower.positions',
   'view.receiving','receiving.scan','receiving.list','receiving.filters','receiving.closeShift','receiving.download','receiving.tv',
   'view.triage','triage.scan','triage.assignPosition','triage.confirmPosition','triage.multipleNotesPosition','triage.requestRemoval','triage.scanRelease','triage.closeShift','triage.tv',
-  'view.assistant','assistant.list','assistant.filters','assistant.details','assistant.generateRelease','assistant.closeShift','assistant.tv',
+  'view.assistant','assistant.list','assistant.filters','assistant.details','assistant.generateRelease','assistant.partialWithdraw','assistant.moveNote','assistant.closeShift','assistant.tv',
   'view.leadership','leadership.kpis','leadership.charts','leadership.notes','leadership.positions','leadership.history','leadership.download','leadership.archiveShift','leadership.tv',
   'view.admin','admin.users','admin.permissions','admin.sectors','admin.positions','admin.history','admin.firebase','admin.clear','admin.identity',
   'view.history','history.filters','history.download','global.search','operator.required','mode.tv'
@@ -384,7 +393,7 @@ const ROLE_PRESETS={
   admin:PERMISSIONS,
   tower:['view.tower','tower.import','tower.list','tower.filters','tower.download','tower.charts','tower.tv','tower.positions','view.history','global.search','operator.required','mode.tv'],
   leader:['view.leadership','leadership.kpis','leadership.charts','leadership.notes','leadership.positions','leadership.history','leadership.download','leadership.archiveShift','leadership.tv','view.history','history.filters','history.download','global.search','operator.required','mode.tv'],
-  assistant:['view.assistant','assistant.list','assistant.filters','assistant.details','assistant.generateRelease','assistant.closeShift','assistant.tv','global.search','operator.required','mode.tv'],
+  assistant:['view.assistant','assistant.list','assistant.filters','assistant.details','assistant.generateRelease','assistant.partialWithdraw','assistant.moveNote','assistant.closeShift','assistant.tv','global.search','operator.required','mode.tv'],
   triage:['view.triage','triage.scan','triage.assignPosition','triage.confirmPosition','triage.multipleNotesPosition','triage.requestRemoval','triage.scanRelease','triage.closeShift','triage.tv','operator.required','mode.tv'],
   receiving:['view.receiving','receiving.scan','receiving.list','receiving.filters','receiving.closeShift','receiving.download','receiving.tv','operator.required','mode.tv']
 };
@@ -416,13 +425,13 @@ const PERMISSION_LABELS={
 'view.tower':'Visualizar Torre de Controle','tower.import':'Importar arquivo da Torre','tower.list':'Visualizar lista de lançamentos','tower.filters':'Usar filtros da Torre','tower.download':'Baixar relação da Torre','tower.charts':'Visualizar gráficos da Torre','tower.tv':'Usar modo TV na Torre','tower.positions':'Visualizar posições e complementos',
 'view.receiving':'Visualizar Recebimento Operacional','receiving.scan':'Bipar Master no Recebimento','receiving.list':'Visualizar lista de Masters recebidas','receiving.filters':'Usar filtros do Recebimento','receiving.closeShift':'Encerrar turno do Recebimento','receiving.download':'Baixar relação do Recebimento','receiving.tv':'Usar modo TV no Recebimento',
 'view.triage':'Visualizar Triagem Operacional','triage.scan':'Bipar AWB na Triagem','triage.assignPosition':'Cadastrar posição para Nota','triage.confirmPosition':'Confirmar posição da AWB','triage.multipleNotesPosition':'Permitir várias Notas na mesma posição','triage.requestRemoval':'Solicitar retirada da Nota','triage.scanRelease':'Bipar código de liberação','triage.closeShift':'Encerrar turno da Triagem','triage.tv':'Usar modo TV na Triagem',
-'view.assistant':'Visualizar Assistente Operacional','assistant.list':'Visualizar lista de Notas','assistant.filters':'Usar filtros do Assistente','assistant.details':'Visualizar detalhes da Nota','assistant.generateRelease':'Gerar código de liberação','assistant.closeShift':'Encerrar turno do Assistente','assistant.tv':'Usar modo TV no Assistente',
+'view.assistant':'Visualizar Assistente Operacional','assistant.list':'Visualizar lista de Notas','assistant.filters':'Usar filtros do Assistente','assistant.details':'Visualizar detalhes da Nota','assistant.generateRelease':'Gerar código de liberação','assistant.partialWithdraw':'Retirar Nota incompleta','assistant.moveNote':'Movimentar Nota entre posições','assistant.closeShift':'Encerrar turno do Assistente','assistant.tv':'Usar modo TV no Assistente',
 'view.leadership':'Visualizar Painel da Liderança','leadership.kpis':'Visualizar indicadores da Liderança','leadership.charts':'Visualizar gráficos da Liderança','leadership.notes':'Visualizar relação geral de Notas','leadership.positions':'Visualizar posições e complementos','leadership.history':'Visualizar histórico detalhado','leadership.download':'Baixar relações da Liderança','leadership.archiveShift':'Limpar turno','leadership.tv':'Usar modo TV na Liderança',
 'view.admin':'Visualizar Administração','admin.users':'Administrar usuários','admin.permissions':'Visualizar catálogo de permissões','admin.sectors':'Configurar telas e setores','admin.positions':'Administrar posições','admin.history':'Visualizar histórico geral','admin.firebase':'Configurar Supabase','admin.clear':'Limpar sistema','admin.identity':'Editar identidade do sistema',
 'view.history':'Visualizar Histórico','history.filters':'Usar filtros do Histórico','history.download':'Baixar Histórico','global.search':'Usar busca universal','operator.required':'Exigir nome do operador','mode.tv':'Permitir modo TV'
 };
 const MODULE_LABELS={auth:'Acesso ao Sistema',navigation:'Navegação',tower:'Torre de Controle',receiving:'Recebimento Operacional',triage:'Triagem Operacional',assistant:'Assistente Operacional',leadership:'Liderança',admin:'Administração',history:'Histórico',system:'Sistema'};
-const ACTION_LABELS={LOGIN:'Entrada no sistema',LOGOUT:'Saída do sistema',ABRIU_TELA:'Abertura de tela',BIPOU_AWB:'Bipagem de AWB',CADASTROU_POSICAO:'Cadastro de posição',RETIROU_NOTA:'Retirada de Nota',GEROU_CODIGO_LIBERACAO:'Geração de código de liberação',ENCERROU_TURNO:'Encerramento de turno',SALVOU_USUARIO:'Cadastro ou edição de usuário',SALVOU_POSICAO:'Cadastro ou edição de posição',EXCLUIU_POSICAO:'Exclusão de posição',ALTEROU_CONFIGURACAO_SETOR:'Alteração de configuração',LIMPEZA_TOTAL:'Limpeza total do sistema',ARQUIVOU_TURNO:'Arquivamento do turno',INICIOU_TURNO:'Início do turno',DOWNLOAD_LISTA:'Download de relação'};
+const ACTION_LABELS={LOGIN:'Entrada no sistema',LOGOUT:'Saída do sistema',ABRIU_TELA:'Abertura de tela',BIPOU_AWB:'Bipagem de AWB',CADASTROU_POSICAO:'Cadastro de posição',RETIROU_NOTA:'Retirada de Nota',GEROU_CODIGO_LIBERACAO:'Geração de código de liberação',ENCERROU_TURNO:'Encerramento de turno',SALVOU_USUARIO:'Cadastro ou edição de usuário',SALVOU_POSICAO:'Cadastro ou edição de posição',EXCLUIU_POSICAO:'Exclusão de posição',ALTEROU_CONFIGURACAO_SETOR:'Alteração de configuração',LIMPEZA_TOTAL:'Limpeza total do sistema',ARQUIVOU_TURNO:'Arquivamento do turno',INICIOU_TURNO:'Início do turno',DOWNLOAD_LISTA:'Download de relação',RETIROU_NOTA_INCOMPLETA:'Retirada de Nota incompleta',MOVIMENTOU_NOTA:'Movimentação de Nota',IMPORTOU_POSICOES:'Importação geral com posições',LIMPOU_HISTORICO_ACOES:'Limpeza do histórico de ações'};
 function permissionLabel(code){return PERMISSION_LABELS[code]||code}
 function roleLabel(code){return ROLE_LABELS[code]||code}
 function moduleLabel(code){return MODULE_LABELS[code]||code}
@@ -430,7 +439,7 @@ function actionLabel(code){return ACTION_LABELS[code]||String(code||'').replaceA
 const STATUS_LABELS={PENDING_RECEIPT:'Aguardando Recebimento',RECEIVED:'Recebida em TZX',TRIAGED:'Triada',RELEASED:'Retirada',BOLSAO:'No Bolsão'};
 function statusLabel(value,row=null){if(row?.releasedAt)return 'Retirada';if(row?.inBolsao||value==='BOLSAO')return 'No Bolsão';if(row?.triagedAt)return 'Triada';if(row?.receivedAt)return 'Recebida em TZX';return STATUS_LABELS[value]||value||'Aguardando Recebimento'}
 function deviceLabel(){const ua=navigator.userAgent.toLowerCase();if(/zebra|tc2|tc5|mc3|android.*mobile/.test(ua))return 'Coletor Zebra ou celular';if(/ipad|tablet|android(?!.*mobile)/.test(ua))return 'Tablet';if(/windows|macintosh|linux/.test(ua))return 'Notebook ou computador';return 'Dispositivo móvel'}
-function detailText(logItem){const d=logItem?.detail||{};const parts=[];if(d.page)parts.push(`Tela: ${PAGES[d.page]?.title||moduleLabel(d.page)}`);if(d.awb)parts.push(`AWB: ${d.awb}`);if(d.note)parts.push(`Nota: ${d.note}`);if(d.master)parts.push(`Master: ${d.master}`);if(d.position)parts.push(`Posição: ${d.position}`);if(d.sector)parts.push(`Setor: ${moduleLabel(d.sector)}`);if(d.shiftKey)parts.push(`Turno: ${d.shiftKey}`);if(d.username)parts.push(`Usuário: ${d.username}`);if(d.code)parts.push(`Código: ${d.code}`);return parts.join(' - ')||'Movimentação registrada'}
+function detailText(logItem){const d=logItem?.detail||{};const parts=[];if(d.page)parts.push(`Tela: ${PAGES[d.page]?.title||moduleLabel(d.page)}`);if(d.awb)parts.push(`AWB: ${d.awb}`);if(d.note)parts.push(`Nota: ${d.note}`);if(d.master)parts.push(`Master: ${d.master}`);if(d.position)parts.push(`Posição: ${d.position}`);if(d.fromPosition)parts.push(`Origem: ${d.fromPosition}`);if(d.toPosition)parts.push(`Destino: ${d.toPosition}`);if(d.reason)parts.push(`Motivo: ${d.reason}`);if(d.mode)parts.push(`Modo: ${d.mode}`);if(d.quantity!=null)parts.push(`Qtd: ${d.quantity}`);if(d.sector)parts.push(`Setor: ${moduleLabel(d.sector)}`);if(d.shiftKey)parts.push(`Turno: ${d.shiftKey}`);if(d.username)parts.push(`Usuário: ${d.username}`);if(d.code)parts.push(`Código: ${d.code}`);return parts.join(' - ')||'Movimentação registrada'}
 
 
 const ALLOWED_ROLES=new Set(['admin','assistant','triage','receiving']);
@@ -471,7 +480,7 @@ function queueSupabasePush(delay=0){
  cloudSyncQueued=true;
  clearTimeout(queueSupabasePush.timer);
  // Agrupa alterações próximas em um único envio. Chamadas normais aguardam ao menos 900 ms.
- const batchDelay=Math.max(Number(delay)||0,900);
+ const batchDelay=Math.max(Number(delay)||0,2500);
  queueSupabasePush.timer=setTimeout(async()=>{
   if(!navigator.onLine||cloudApplying)return;
   cloudSyncQueued=false;
@@ -507,7 +516,20 @@ function liveMessage(evt){const d=evt?.detail||{},op=evt?.operator||'Operação'
 function showLiveEvent(evt){if(!evt?.id||receivedLiveEventIds.has(evt.id)||evt.clientId===CLIENT_ID)return;receivedLiveEventIds.add(evt.id);if(receivedLiveEventIds.size>500){const first=receivedLiveEventIds.values().next().value;receivedLiveEventIds.delete(first)}toast(liveMessage(evt),'ok');try{if(document.visibilityState==='visible'&&navigator.vibrate)navigator.vibrate([80,40,80])}catch(_){}}
 async function broadcastLiveEvent(evt){if(!evt)return;evt.clientId=CLIENT_ID;evt.sentAt=Date.now();try{if(supabaseChannel)await supabaseChannel.send({type:'broadcast',event:'ccpb-action',payload:evt})}catch(e){console.warn('CCPB: falha no aviso em tempo real.',e)}try{localStorage.setItem('ccpb_live_event',JSON.stringify(evt));localStorage.removeItem('ccpb_live_event')}catch(_){}}
 function has(p){return session?.user?.permissions?.includes(p)||session?.user?.role==='admin'}
-function log(action,detail={},module=currentPage||'system'){const entry={id:crypto.randomUUID(),at:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR'),time:new Date().toLocaleTimeString('pt-BR'),username:session?.user?.username||'sistema',operator:session?.operator||session?.user?.name||'Sistema',role:roleLabel(session?.user?.role)||'Sistema',module,moduleName:moduleLabel(module),action,actionName:actionLabel(action),detail,detailText:'',device:deviceLabel()};entry.detailText=detailText(entry);state.logs.unshift(entry);if(LIVE_ACTIONS.has(action)){const live=safeClone(entry);if(supabaseChannel&&realtimeConnected)broadcastLiveEvent(live);else pendingLiveEvents.push(live)}if(state.logs.length>30000)state.logs.length=30000;saveState()}
+const IMPORTANT_ACTIONS=new Set([
+ 'IMPORTOU_ARQUIVO','IMPORTOU_POSICOES','RETIROU_NOTA','RETIROU_NOTA_INCOMPLETA','MOVIMENTOU_NOTA',
+ 'SALVOU_USUARIO','SALVOU_POSICAO','EXCLUIU_POSICAO','ALTEROU_CONFIGURACAO_SETOR',
+ 'LIMPEZA_TOTAL','LIMPOU_SISTEMA','LIMPOU_TURNO','ARQUIVOU_TURNO','LIMPOU_HISTORICO_ACOES'
+]);
+function log(action,detail={},module=currentPage||'system'){
+ if(!IMPORTANT_ACTIONS.has(action))return;
+ const entry={id:crypto.randomUUID(),at:new Date().toISOString(),date:new Date().toLocaleDateString('pt-BR'),time:new Date().toLocaleTimeString('pt-BR'),username:session?.user?.username||'sistema',operator:session?.operator||session?.user?.name||'Sistema',role:roleLabel(session?.user?.role)||'Sistema',module,moduleName:moduleLabel(module),action,actionName:actionLabel(action),detail,detailText:'',device:deviceLabel()};
+ entry.detailText=detailText(entry);
+ state.logs.unshift(entry);
+ if(LIVE_ACTIONS.has(action)){const live=safeClone(entry);if(supabaseChannel&&realtimeConnected)broadcastLiveEvent(live);else pendingLiveEvents.push(live)}
+ if(state.logs.length>5000)state.logs.length=5000;
+ saveState();
+}
 function statusOfNote(rows){const total=rows.length,received=rows.filter(r=>r.receivedAt).length,triaged=rows.filter(r=>r.triagedAt).length,released=rows.filter(r=>r.releasedAt).length,inBolsao=rows.some(r=>r.inBolsao&&!r.releasedAt);if(released===total&&total)return'Retirada';if(inBolsao&&triaged<total)return'No Bolsão';if(triaged===total&&total)return'Aguardando Assistente';if(triaged)return received<total?'Aguardando complemento':'Em triagem';if(received===total&&total)return'Aguardando triagem';if(received)return'Parcialmente recebida';return'A caminho'}
 function noteSummary(note,rows=cache.byNote.get(norm(note))||[]){const masters=uniq(rows.map(r=>r.master)),bases=uniq(rows.map(r=>r.base)),fcs=uniq(rows.map(r=>r.fc));const total=rows.length,received=rows.filter(r=>r.receivedAt).length,triaged=rows.filter(r=>r.triagedAt).length,released=rows.filter(r=>r.releasedAt).length;const promises=rows.map(r=>r.promiseDate).filter(Boolean).sort();return{note:rows[0]?.note||note,masters,bases,fcs,total,received,triaged,released,missingReceipt:total-received,missingTriage:total-triaged,position:rows.find(r=>r.inBolsao&&!r.releasedAt)?'BOLSÃO':(rows.find(r=>r.position)?.position||''),promiseDate:promises[0]||'',status:statusOfNote(rows),pct:total?Math.round(triaged/total*100):0}}
 function allNotes(){return[...cache.byNote.entries()].map(([n,rows])=>noteSummary(n,rows))}
@@ -531,10 +553,11 @@ const PAGES={
  assistant:{title:'Assistente Operacional',subtitle:'Conferência e liberação das Notas completas',perm:'view.assistant',single:true,render:renderAssistant},
  leadership:{title:'Painel Operacional',subtitle:'Gráficos, indicadores e relação geral lançada',perm:'view.leadership',single:false,render:renderLeadership},
  positions:{title:'Ocupação',subtitle:'Todas as AWBs atualmente nas posições',perm:'leadership.positions',single:false,render:renderPositions},
- bolsao:{title:'Relação Bolsão',subtitle:'Todas as AWBs atualmente no Bolsão',perm:'view.leadership',single:false,render:renderBolsaoRelation}
+ bolsao:{title:'Relação Bolsão',subtitle:'Todas as AWBs atualmente no Bolsão',perm:'view.leadership',single:false,render:renderBolsaoRelation},
+ actionHistory:{title:'Histórico de Ações',subtitle:'Ações operacionais importantes e rastreáveis',perm:'view.admin',single:false,render:renderActionHistoryPage}
 };
 
-function pageAllowed(id,p){if(session?.user?.role==='admin')return ['leadership','positions','bolsao'].includes(id);return has(p.perm)}
+function pageAllowed(id,p){if(session?.user?.role==='admin')return ['leadership','positions','bolsao','actionHistory'].includes(id);return has(p.perm)}
 function allowedPages(){return Object.entries(PAGES).filter(([id,p])=>pageAllowed(id,p))}
 function renderNav(){const nav=$('#nav');nav.innerHTML=allowedPages().map(([id,p])=>`<button class="nav-btn ${id===currentPage?'active':''}" data-page="${id}">${p.title}</button>`).join('');nav.onclick=e=>{const b=e.target.closest('[data-page]');if(b)openPage(b.dataset.page)}}
 function openPage(id){const p=PAGES[id];if(!p||!pageAllowed(id,p)){toast('Acesso não autorizado.','error');return}currentPage=id;document.body.classList.toggle('single-screen',p.single&&session.user.role!=='admin');document.body.classList.toggle('triage-compact',id==='triage'&&innerWidth<=760);$('#pageTitle').textContent=p.title;$('#pageSubtitle').textContent=p.subtitle;renderNav();p.render();log('ABRIU_TELA',{page:id},'navigation');if(innerWidth<760)$('#sidebar').classList.remove('open')}
@@ -561,10 +584,79 @@ function drawTowerCharts(bases,recs){destroyChart('towerBase');charts.towerBase=
 function destroyChart(k){try{charts[k]?.destroy()}catch{}delete charts[k]}
 
 async function importTower(file){if(!file)return;$('#importPanel')?.classList.remove('hidden');setImportProgress(2,'Lendo arquivo...');try{const data=await file.arrayBuffer();const wb=XLSX.read(data,{type:'array',cellDates:false});const ws=wb.Sheets[wb.SheetNames[0]];const raw=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true});if(!raw.length)throw new Error('Arquivo sem linhas.');const mapped=[];let invalid=0;const existing=new Set(cache.records.map(r=>norm(r.awb)));const seen=new Set();for(let i=0;i<raw.length;i++){const x=normalizeRow(raw[i]);if(!x.master||!x.note||!x.awb||!x.fc||!x.base){invalid++;continue}if(existing.has(norm(x.awb))||seen.has(norm(x.awb)))continue;seen.add(norm(x.awb));mapped.push({...x,id:crypto.randomUUID(),status:'PENDING_RECEIPT',createdAt:new Date().toISOString(),createdBy:session.operator,createdUser:session.user.username,shift:shiftKey()});if(i%3000===0){setImportProgress(Math.min(35,5+i/raw.length*30),`Validando ${i.toLocaleString('pt-BR')} de ${raw.length.toLocaleString('pt-BR')}...`);await idle()}}
- const duplicates=raw.length-invalid-mapped.length;const importValidation=$('#importValidation');if(importValidation)importValidation.innerHTML=`Linhas encontradas: <b>${raw.length.toLocaleString('pt-BR')}</b> &nbsp; Válidas novas: <b>${mapped.length.toLocaleString('pt-BR')}</b> &nbsp; Duplicadas: <b>${duplicates.toLocaleString('pt-BR')}</b> &nbsp; Inválidas: <b>${invalid.toLocaleString('pt-BR')}</b>`;if(!mapped.length){setImportProgress(100,'Nenhuma linha nova para inserir.');toast(`Nenhuma AWB nova. ${duplicates.toLocaleString('pt-BR')} duplicada(s) e ${invalid.toLocaleString('pt-BR')} inválida(s).`,'ok');return}for(let i=0;i<mapped.length;i+=1500){state.records.push(...mapped.slice(i,i+1500));setImportProgress(35+Math.round((i+1500)/mapped.length*60),`Gravando ${Math.min(i+1500,mapped.length).toLocaleString('pt-BR')} de ${mapped.length.toLocaleString('pt-BR')}...`);await idle()}rebuildCache();await saveState(true);setImportProgress(100,`${mapped.length.toLocaleString('pt-BR')} AWBs acrescentadas com sucesso.`);log('IMPORTOU_ARQUIVO',{file:file.name,found:raw.length,inserted:mapped.length,duplicates,invalid},'tower');toast(`${mapped.length.toLocaleString('pt-BR')} AWBs importadas. ${duplicates.toLocaleString('pt-BR')} duplicada(s) ignorada(s).`,'ok');setTimeout(()=>{if(currentPage==='leadership')renderLeadership();else if(currentPage==='positions')renderPositions();else if(currentPage==='bolsao')renderBolsaoRelation();else renderTower()},700)}catch(err){console.error(err);setImportProgress(100,`Falha: ${err.message}`);toast(`Falha ao importar: ${err.message}`,'error')}}
+ const duplicates=raw.length-invalid-mapped.length;const importValidation=$('#importValidation');if(importValidation)importValidation.innerHTML=`Linhas encontradas: <b>${raw.length.toLocaleString('pt-BR')}</b> &nbsp; Válidas novas: <b>${mapped.length.toLocaleString('pt-BR')}</b> &nbsp; Duplicadas: <b>${duplicates.toLocaleString('pt-BR')}</b> &nbsp; Inválidas: <b>${invalid.toLocaleString('pt-BR')}</b>`;if(mapped.length&&!capacityWarning(mapped.length,'a importação')){setImportProgress(100,'Importação cancelada pelo usuário.');return}if(!mapped.length){setImportProgress(100,'Nenhuma linha nova para inserir.');toast(`Nenhuma AWB nova. ${duplicates.toLocaleString('pt-BR')} duplicada(s) e ${invalid.toLocaleString('pt-BR')} inválida(s).`,'ok');return}for(let i=0;i<mapped.length;i+=1500){state.records.push(...mapped.slice(i,i+1500));setImportProgress(35+Math.round((i+1500)/mapped.length*60),`Gravando ${Math.min(i+1500,mapped.length).toLocaleString('pt-BR')} de ${mapped.length.toLocaleString('pt-BR')}...`);await idle()}rebuildCache();await saveState(true);setImportProgress(100,`${mapped.length.toLocaleString('pt-BR')} AWBs acrescentadas com sucesso.`);log('IMPORTOU_ARQUIVO',{file:file.name,found:raw.length,inserted:mapped.length,duplicates,invalid},'tower');toast(`${mapped.length.toLocaleString('pt-BR')} AWBs importadas. ${duplicates.toLocaleString('pt-BR')} duplicada(s) ignorada(s).`,'ok');setTimeout(()=>{if(currentPage==='leadership')renderLeadership();else if(currentPage==='positions')renderPositions();else if(currentPage==='bolsao')renderBolsaoRelation();else renderTower()},700)}catch(err){console.error(err);setImportProgress(100,`Falha: ${err.message}`);toast(`Falha ao importar: ${err.message}`,'error')}}
+
+async function importPositionsGeneral(file){
+ if(!file)return;
+ try{
+  const data=await file.arrayBuffer(),wb=XLSX.read(data,{type:'array',cellDates:false}),ws=wb.Sheets[wb.SheetNames[0]];
+  const raw=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true});
+  if(!raw.length)throw new Error('Arquivo sem linhas.');
+  const parsed=[],seen=new Set();let invalid=0;
+  for(const row of raw){
+   const x=normalizeRowWithPosition(row);
+   if(!x.awb||!x.position){invalid++;continue}
+   const k=norm(x.awb);if(seen.has(k))continue;seen.add(k);parsed.push(x);
+  }
+  if(!parsed.length)throw new Error('Nenhuma linha válida com AWB e Posição.');
+  const newCount=parsed.filter(x=>!cache.byAwb.has(norm(x.awb))).length;
+  if(!capacityWarning(newCount,'a importação com posições'))return;
+  openModal('Como deseja subir a relação?',`<p>Arquivo: <b>${escapeHtml(file.name)}</b></p><p>Linhas válidas: <b>${parsed.length.toLocaleString('pt-BR')}</b> | AWBs novas: <b>${newCount.toLocaleString('pt-BR')}</b> | Inválidas: <b>${invalid.toLocaleString('pt-BR')}</b></p><p><b>Acrescentar:</b> mantém o que já existe nas posições e adiciona/atualiza as AWBs do arquivo.</p><p><b>Substituir:</b> limpa somente as posições citadas no arquivo e depois aplica esta relação. Não apaga as AWBs do sistema; apenas remove o vínculo anterior dessas posições.</p><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px"><button class="btn primary" id="posImportAdd">Acrescentar</button><button class="btn danger" id="posImportReplace">Substituir</button><button class="btn subtle" id="posImportCancel">Cancelar</button></div>`);
+  $('#posImportAdd').onclick=()=>applyPositionsImport(parsed,'ACRESCENTAR',file.name);
+  $('#posImportReplace').onclick=()=>applyPositionsImport(parsed,'SUBSTITUIR',file.name);
+  $('#posImportCancel').onclick=closeModal;
+ }catch(err){console.error(err);toast('Falha ao importar posições: '+err.message,'error')}
+}
+function normalizeRowWithPosition(row){
+ const obj={};for(const[k,v]of Object.entries(row)){const nk=String(k).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');obj[nk]=v}
+ const base=normalizeRow(row);
+ return {...base,position:norm(obj.posicao||obj.position||obj.pos||'')};
+}
+async function applyPositionsImport(parsed,mode,fileName){
+ const touchedPositions=new Set(parsed.map(x=>norm(x.position)).filter(Boolean));
+ if(mode==='SUBSTITUIR'){
+  for(const r of state.records){
+   if(!r.releasedAt&&touchedPositions.has(norm(r.position))&&!parsed.some(x=>norm(x.awb)===norm(r.awb))){
+    r.position='';
+   }
+  }
+ }
+ let created=0,updated=0;
+ for(const x of parsed){
+  let r=cache.byAwb.get(norm(x.awb));
+  if(r){
+   r.position=x.position;
+   if(x.master)r.master=x.master;if(x.note)r.note=x.note;if(x.fc)r.fc=x.fc;if(x.promiseDate)r.promiseDate=x.promiseDate;if(x.base)r.base=x.base;
+   updated++;
+  }else{
+   r={...x,id:crypto.randomUUID(),status:'PENDING_RECEIPT',createdAt:new Date().toISOString(),createdBy:session.operator,createdUser:session.user.username,shift:shiftKey()};
+   state.records.push(r);created++;
+  }
+  if(!state.positions.some(p=>norm(p.code)===norm(x.position)))state.positions.push({code:x.position,active:true,createdAt:new Date().toISOString(),createdBy:session.operator});
+ }
+ rebuildCache();
+ log('IMPORTOU_POSICOES',{file:fileName,mode,quantity:parsed.length,created,updated,positions:touchedPositions.size},'admin');
+ await saveState(true);closeModal();toast(`Relação aplicada: ${created} AWB(s) nova(s), ${updated} atualizada(s), ${touchedPositions.size} posição(ões).`,'ok');
+ if($('#adminBody'))adminPositionImport();else if(currentPage==='leadership')renderLeadership();else refreshCurrentViewPreservingState();
+}
+function adminPositionImport(){
+ $('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Subir relação geral com posições</h3></div><div class="panel-body"><p>Use um Excel com as colunas normais do CCPB e uma coluna adicional <b>Posição</b>. AWBs já existentes mantêm seus status de recebimento/triagem; a importação altera somente os dados informados e o vínculo de posição.</p><p><b>Acrescentar</b> preserva o conteúdo atual. <b>Substituir</b> limpa o vínculo das posições presentes no arquivo antes de aplicar a nova relação.</p><input id="generalPositionFile" type="file" accept=".xlsx,.xls,.csv" class="hidden"><button class="btn primary" id="generalPositionBtn">Selecionar Excel</button></div></div>`;
+ $('#generalPositionBtn').onclick=()=>$('#generalPositionFile').click();
+ $('#generalPositionFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importPositionsGeneral(f)};
+}
+
 function normalizeRow(row){const obj={};for(const[k,v]of Object.entries(row)){const nk=String(k).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');obj[nk]=v}return{master:String(obj.master||'').trim(),note:String(obj.nota||obj.note||'').trim(),awb:String(obj.awb||'').trim(),fc:String(obj.fc||'').trim(),promiseDate:isoDate(obj.datapromessa||obj.promessa||obj.vencimento),base:String(obj.basedeorigem||obj.baseorigem||obj.base||'').trim()}}
 function setImportProgress(p,t){if($('#importBar'))$('#importBar').style.width=`${Math.min(100,p)}%`;if($('#importText'))$('#importText').textContent=t}
 const idle=()=>new Promise(r=>setTimeout(r,0));
+
+const OPERATIONAL_AWB_LIMIT=20000;
+function capacityWarning(additional=0,context='esta operação'){
+ const projected=cache.records.length+Math.max(0,Number(additional)||0);
+ const pct=Math.round(projected/OPERATIONAL_AWB_LIMIT*100);
+ if(pct<85)return true;
+ return confirm(`ATENÇÃO — capacidade operacional\n\nLimite recomendado: ${OPERATIONAL_AWB_LIMIT.toLocaleString('pt-BR')} AWBs\nAtual: ${cache.records.length.toLocaleString('pt-BR')}\nApós ${context}: ${projected.toLocaleString('pt-BR')} (${pct}%)\n\nEste limite é apenas um alerta e NÃO bloqueia o sistema.\nDeseja continuar?`);
+}
+
 
 function setorLabel(sector){return{receiving:'Recebimento',triage:'Triagem',assistant:'Assistente'}[sector]||moduleLabel(sector)}
 function turnoPrecisaIniciar(sector){const key=shiftKey();return state.shiftRestarts?.some(x=>x.shiftKey===key&&x.sector===sector)}
@@ -643,10 +735,67 @@ function promptReleaseCode(){const note=$('#removeBtn')?.dataset.note||'';if(!no
 async function releaseNote(note,code){const rel=state.releases.find(x=>x.note===note&&x.code===norm(code)&&!x.usedAt&&new Date(x.expiresAt)>new Date());if(!rel){toast('Código inválido ou expirado.','error');return}const rows=cache.byNote.get(norm(note))||[];if(rows.some(r=>!r.triagedAt)){toast('A Nota ainda possui AWBs pendentes.','error');return}const ts=new Date().toISOString();rows.forEach(r=>{r.releasedAt=ts;r.releasedBy=session.operator;r.releasedUser=session.user.username;r.status='RELEASED'});rel.usedAt=ts;rel.usedBy=session.operator;log('RETIROU_NOTA',{note,position:rows[0]?.position,code},'triage');await saveState(true);closeModal();toast('Nota retirada e posição liberada.','ok');triageMobileLast=null;renderTriage()}
 
 function noteCard(n){return`<div class="note-card" data-note="${n.note}"><strong>${n.note}</strong><p>${n.triaged}/${n.total} triadas • ${n.missingReceipt} faltando receber</p><span class="status ${n.status==='Retirada'?'released':n.status==='Aguardando Assistente'?'complete':n.status==='No Bolsão'?'bolsao':'pending'}">${n.status}</span></div>`}
-function renderAssistant(){const notes=allNotes().filter(n=>(n.received||n.triaged)&&n.status!=='Retirada');$('#content').innerHTML=head('Assistente Operacional','Conferência das Notas, Bolsão e geração do código de liberação','<button class="btn success" id="bolsaoBtn">Lançar no Bolsão</button>')+`<div class="kpi-grid">${kpi('Notas em acompanhamento',notes.length)}${kpi('Notas completas',notes.filter(n=>n.status==='Aguardando Assistente').length)}${kpi('Aguardando complementos',notes.filter(n=>n.missingReceipt>0).length)}${kpi('AWBs no Bolsão',bolsaoCount())}</div><div class="panel"><div class="filter-row"><input id="assistantSearch" placeholder="Nota, Master, AWB ou FC"><select id="assistantDate"><option value="">Todas as datas</option>${uniq(notes.map(n=>n.promiseDate)).sort().map(x=>`<option value="${x}">${dateBR(x)}</option>`).join('')}</select><select id="assistantBase"><option value="">Todas as bases</option>${uniq(notes.flatMap(n=>n.bases)).sort().map(x=>`<option>${x}</option>`).join('')}</select><select id="assistantStatus"><option value="">Todos os status</option>${uniq(notes.map(n=>n.status)).map(x=>`<option value="${x}">${statusLabel(x)}</option>`).join('')}</select></div><div id="assistantCards" class="panel-body note-cards"></div></div>`;const refresh=()=>{const q=$('#assistantSearch').value.toLowerCase(),dt=$('#assistantDate').value,ba=$('#assistantBase').value,st=$('#assistantStatus').value;$('#assistantCards').innerHTML=notes.filter(n=>(!q||JSON.stringify(n).toLowerCase().includes(q))&&(!dt||n.promiseDate===dt)&&(!ba||n.bases.includes(ba))&&(!st||n.status===st)).map(noteCard).join('');$$('.note-card').forEach(x=>x.onclick=()=>openNoteModal(x.dataset.note,true))};['assistantSearch','assistantDate','assistantBase','assistantStatus'].forEach(id=>{const e=$('#'+id);e.oninput=refresh;e.onchange=refresh});$('#bolsaoBtn').onclick=openBolsaoModal;refresh()}
-function openBolsaoModal(){openModal('Lançar no Bolsão',`<p>Digite a posição. O sistema mostrará somente as Notas que estão nela.</p><div class="bolsao-position-row"><label>Posição<input id="bolsaoPosition" autocomplete="off" placeholder="Digite ou bipe a posição"></label><button id="findBolsao" class="btn primary">Localizar Notas</button></div><div id="bolsaoNotes" class="bolsao-list"><small>Informe uma posição para consultar.</small></div><button id="confirmBolsao" class="btn success" style="margin-top:14px" disabled>Confirmar lançamento no Bolsão</button>`);const load=()=>{const pos=norm($('#bolsaoPosition').value);const notes=allNotes().filter(n=>norm(n.position)===pos&&n.status!=='Retirada'&&n.status!=='No Bolsão');$('#bolsaoNotes').innerHTML=notes.length?notes.map(n=>`<label class="check-card"><input type="checkbox" class="bolsaoNote" value="${n.note}"><span><b>Nota ${n.note}</b><br><small>${n.triaged}/${n.total} triadas • ${n.missingReceipt} faltando receber</small></span></label>`).join(''):'<div class="bolsao-banner">Nenhuma Nota encontrada nesta posição.</div>';$('#confirmBolsao').disabled=!notes.length;$$('.bolsaoNote').forEach(x=>x.onchange=()=>$('#confirmBolsao').disabled=!$$('.bolsaoNote:checked').length)};$('#findBolsao').onclick=load;$('#bolsaoPosition').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();load()}};$('#confirmBolsao').onclick=async()=>{const pos=norm($('#bolsaoPosition').value),selected=$$('.bolsaoNote:checked').map(x=>x.value);if(!pos||!selected.length){toast('Digite a posição e marque pelo menos uma Nota.','error');return}selected.forEach(note=>(cache.byNote.get(norm(note))||[]).filter(r=>r.triagedAt&&!r.releasedAt).forEach(r=>{r.originalPosition=r.originalPosition||r.position||pos;r.inBolsao=true;r.position='';r.status='BOLSAO'}));rebuildCache();log('LANÇOU_BOLSAO',{position:pos,notes:selected},'assistant');await saveState(true);closeModal();toast(`${selected.length} Nota(s) lançada(s) no Bolsão.`,'ok');renderAssistant()}}
+function renderAssistant(){const notes=allNotes().filter(n=>(n.received||n.triaged)&&n.status!=='Retirada');$('#content').innerHTML=head('Assistente Operacional','Conferência das Notas, Bolsão e geração do código de liberação',`${has('assistant.partialWithdraw')?'<button class="btn primary" id="partialWithdrawBtn">Retirar Nota Incompleta</button>':''}${has('assistant.moveNote')?'<button class="btn primary" id="moveNoteBtn">Movimentar Nota</button>':''}<button class="btn primary" id="bolsaoBtn">Lançar no Bolsão</button>`)+`<div class="kpi-grid">${kpi('Notas em acompanhamento',notes.length)}${kpi('Notas completas',notes.filter(n=>n.status==='Aguardando Assistente').length)}${kpi('Aguardando complementos',notes.filter(n=>n.missingReceipt>0).length)}${kpi('AWBs no Bolsão',bolsaoCount())}</div><div class="panel"><div class="filter-row"><input id="assistantSearch" placeholder="Nota, Master, AWB ou FC"><select id="assistantDate"><option value="">Todas as datas</option>${uniq(notes.map(n=>n.promiseDate)).sort().map(x=>`<option value="${x}">${dateBR(x)}</option>`).join('')}</select><select id="assistantBase"><option value="">Todas as bases</option>${uniq(notes.flatMap(n=>n.bases)).sort().map(x=>`<option>${x}</option>`).join('')}</select><select id="assistantStatus"><option value="">Todos os status</option>${uniq(notes.map(n=>n.status)).map(x=>`<option value="${x}">${statusLabel(x)}</option>`).join('')}</select></div><div id="assistantCards" class="panel-body note-cards"></div></div>`;const refresh=()=>{const q=$('#assistantSearch').value.toLowerCase(),dt=$('#assistantDate').value,ba=$('#assistantBase').value,st=$('#assistantStatus').value;$('#assistantCards').innerHTML=notes.filter(n=>(!q||JSON.stringify(n).toLowerCase().includes(q))&&(!dt||n.promiseDate===dt)&&(!ba||n.bases.includes(ba))&&(!st||n.status===st)).map(noteCard).join('');$$('.note-card').forEach(x=>x.onclick=()=>openNoteModal(x.dataset.note,true))};['assistantSearch','assistantDate','assistantBase','assistantStatus'].forEach(id=>{const e=$('#'+id);e.oninput=refresh;e.onchange=refresh});$('#bolsaoBtn').onclick=openBolsaoModal;if($('#partialWithdrawBtn'))$('#partialWithdrawBtn').onclick=openPartialWithdrawModal;if($('#moveNoteBtn'))$('#moveNoteBtn').onclick=openMoveNoteModal;refresh()}
+function openBolsaoModal(){openModal('Lançar no Bolsão',`<p>Digite a posição. O sistema mostrará somente as Notas que estão nela.</p><div class="bolsao-position-row"><label>Posição<input id="bolsaoPosition" class="operation-field" autocomplete="off" placeholder="Digite ou bipe a posição"></label><button id="findBolsao" class="btn primary">Localizar Notas</button></div><div id="bolsaoNotes" class="bolsao-list"><small>Informe uma posição para consultar.</small></div><div class="operation-actions"><button id="confirmBolsao" class="btn primary" disabled>Confirmar lançamento no Bolsão</button></div>`);const load=()=>{const pos=norm($('#bolsaoPosition').value);const notes=allNotes().filter(n=>norm(n.position)===pos&&n.status!=='Retirada'&&n.status!=='No Bolsão');$('#bolsaoNotes').innerHTML=notes.length?notes.map(n=>`<label class="check-card"><input type="checkbox" class="bolsaoNote" value="${n.note}"><span><b>Nota ${n.note}</b><br><small>${n.triaged}/${n.total} triadas • ${n.missingReceipt} faltando receber</small></span></label>`).join(''):'<div class="bolsao-banner">Nenhuma Nota encontrada nesta posição.</div>';$('#confirmBolsao').disabled=!notes.length;$$('.bolsaoNote').forEach(x=>x.onchange=()=>$('#confirmBolsao').disabled=!$$('.bolsaoNote:checked').length)};$('#findBolsao').onclick=load;$('#bolsaoPosition').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();load()}};$('#confirmBolsao').onclick=async()=>{const pos=norm($('#bolsaoPosition').value),selected=$$('.bolsaoNote:checked').map(x=>x.value);if(!pos||!selected.length){toast('Digite a posição e marque pelo menos uma Nota.','error');return}selected.forEach(note=>(cache.byNote.get(norm(note))||[]).filter(r=>r.triagedAt&&!r.releasedAt).forEach(r=>{r.originalPosition=r.originalPosition||r.position||pos;r.inBolsao=true;r.position='';r.status='BOLSAO'}));rebuildCache();log('LANÇOU_BOLSAO',{position:pos,notes:selected},'assistant');await saveState(true);closeModal();toast(`${selected.length} Nota(s) lançada(s) no Bolsão.`,'ok');renderAssistant()}}
 function promptReleaseCodeForNote(note){if(!note)return;openModal('Retirar Nota',`<p>Informe ou bipa o código gerado pelo Assistente para a Nota <b>${note}</b>.</p><input id="releaseInput" class="scan-input" autofocus><button id="releaseConfirm" class="btn success" style="margin-top:12px">Confirmar retirada</button>`);$('#releaseConfirm').onclick=()=>releaseNote(note,$('#releaseInput').value)}
 function openNoteModal(note,assistantMode=false,triageMode=false){const n=noteSummary(note),rows=cache.byNote.get(norm(note))||[];const complete=n.triaged===n.total&&n.total>0&&n.missingReceipt===0;const alreadyReleased=rows.every(r=>r.releasedAt);const canRelease=assistantMode&&has('assistant.generateRelease')&&complete&&!alreadyReleased;const canWithdraw=triageMode&&has('triage.scanRelease')&&complete&&!alreadyReleased;const historyRows=state.logs.filter(l=>JSON.stringify(l.detail).includes(n.note)).slice(0,200).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));openModal(`Nota ${n.note}`,`<div class="kpi-grid">${kpi('Previstas',n.total)}${kpi('Recebidas',n.received)}${kpi('Triadas',n.triaged)}${kpi('Faltando receber',n.missingReceipt)}</div><div class="grid-2"><div class="panel-body"><p><b>Masters:</b> ${n.masters.join(' - ')}</p><p><b>Base:</b> ${n.bases.join(' - ')}</p><p><b>FC:</b> ${n.fcs.join(' - ')}</p><p><b>Data promessa:</b> ${dateBR(n.promiseDate)}</p><p><b>Posição:</b> ${n.position||'Não cadastrada'}</p><p><b>Status:</b> ${n.status}</p></div><div id="qrArea" class="panel-body" style="text-align:center"></div></div>${canRelease?'<button id="generateRelease" class="btn success">Gerar QR Code de liberação</button>':''}${canWithdraw?'<button id="withdrawFromCard" class="btn success" style="margin-top:10px">Retirar Nota com código do Assistente</button>':''}${assistantMode||triageMode?'':`<div class="panel"><div class="panel-head"><h3>Histórico da Nota</h3></div>${table([{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Módulo',key:'moduleName'},{label:'Movimentação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}],historyRows)}</div>`}`);if($('#generateRelease'))$('#generateRelease').onclick=()=>generateRelease(n.note);if($('#withdrawFromCard'))$('#withdrawFromCard').onclick=()=>{closeModal();const rb=$('#removeBtn');if(rb){rb.dataset.note=n.note;promptReleaseCode()}else promptReleaseCodeForNote(n.note)}}
+
+const PARTIAL_WITHDRAW_REASONS=[
+ 'Entrega realizada / encomenda finalizada',
+ 'Complemento não será recebido',
+ 'Divergência na coleta / origem',
+ 'Prazo operacional encerrado',
+ 'Orientação administrativa',
+ 'Outro motivo operacional'
+];
+function openPartialWithdrawModal(){
+ openModal('Retirar Nota Incompleta',`<p>Pesquise uma Nota que ainda não foi completada. A retirada afetará somente as AWBs já recebidas/triadas e ainda ativas no CCPB.</p><div class="operation-grid"><label>Nota<input id="partialNoteSearch" class="operation-field" autofocus placeholder="Digite ou bipe a Nota"></label></div><div id="partialNoteSummary" style="margin-top:12px"></div>`);
+ const f=$('#partialNoteSearch');f.oninput=()=>renderPartialWithdrawSummary(f.value);f.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();renderPartialWithdrawSummary(f.value)}};f.focus();
+}
+function renderPartialWithdrawSummary(value){
+ const note=norm(value),box=$('#partialNoteSummary');if(!box)return;
+ const rows=cache.byNote.get(note)||[];if(!rows.length){box.innerHTML=note?'<p class="status danger">Nota não localizada.</p>':'';return}
+ const n=noteSummary(note,rows),active=rows.filter(r=>!r.releasedAt&&(r.triagedAt||r.inBolsao));
+ const incomplete=n.triaged<n.total||n.received<n.total;
+ box.innerHTML=`<div class="kpi-grid">${kpi('Previstas',n.total)}${kpi('Recebidas',n.received)}${kpi('Triadas',n.triaged)}${kpi('Faltantes',Math.max(n.missingReceipt,n.missingTriage))}</div><p><b>Base:</b> ${n.bases.join(' - ')||'-'} | <b>Origem/Master:</b> ${n.masters.join(' - ')||'-'}</p><p><b>Posição:</b> ${n.position||'Não cadastrada'} | <b>Status:</b> ${n.status}</p>${!incomplete?'<p class="status danger">Esta Nota está completa. Use o fluxo normal de retirada.</p>':!active.length?'<p class="status danger">Não há AWBs triadas/no Bolsão disponíveis para retirada.</p>':`<label>Motivo obrigatório<select id="partialReason" class="operation-field"><option value="">Selecione...</option>${PARTIAL_WITHDRAW_REASONS.map(x=>`<option>${x}</option>`).join('')}</select></label><div class="operation-actions"><button class="btn primary" id="confirmPartialWithdraw">Confirmar retirada incompleta (${active.length} AWBs)</button></div>`}`;
+ if($('#confirmPartialWithdraw'))$('#confirmPartialWithdraw').onclick=()=>confirmPartialWithdraw(note);
+}
+async function confirmPartialWithdraw(note){
+ const reason=$('#partialReason')?.value||'';if(!reason){toast('Selecione o motivo da retirada.','error');return}
+ const rows=cache.byNote.get(norm(note))||[],n=noteSummary(note,rows);
+ if(n.triaged===n.total&&n.received===n.total){toast('A Nota já está completa. Use a retirada normal.','error');return}
+ const active=rows.filter(r=>!r.releasedAt&&(r.triagedAt||r.inBolsao));if(!active.length){toast('Nenhuma AWB disponível para retirada.','error');return}
+ if(!confirm(`Retirar ${active.length} AWB(s) da Nota ${n.note} como Nota incompleta?\n\nMotivo: ${reason}`))return;
+ const ts=new Date().toISOString(),fromPosition=n.position;
+ active.forEach(r=>{r.releasedAt=ts;r.releasedBy=session.operator;r.releasedUser=session.user.username;r.status='RELEASED';r.partialWithdraw=true;r.partialWithdrawReason=reason;r.partialWithdrawAt=ts});
+ log('RETIROU_NOTA_INCOMPLETA',{note:n.note,position:fromPosition,reason,quantity:active.length,total:n.total,missing:n.total-active.length},'assistant');
+ await saveState(true);closeModal();toast(`Nota ${n.note}: ${active.length} AWB(s) retiradas como incompleta.`,'ok');renderAssistant();
+}
+function openMoveNoteModal(){
+ openModal('Movimentar Nota',`<p>Mova uma Nota inteira de uma posição para outra. Uma Nota continuará vinculada a uma única posição.</p><div class="operation-grid"><label>Nota<input id="moveNoteSearch" class="operation-field" autofocus placeholder="Digite ou bipe a Nota"></label><label>Nova posição<input id="moveNotePosition" class="operation-field" placeholder="Digite ou bipe a posição"></label></div><div id="moveNoteSummary" style="margin-top:12px"></div>`);
+ const refresh=()=>renderMoveNoteSummary($('#moveNoteSearch').value);$('#moveNoteSearch').oninput=refresh;$('#moveNoteSearch').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();refresh()}};$('#moveNotePosition').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();confirmMoveNote()}};$('#moveNoteSearch').focus();
+}
+function renderMoveNoteSummary(value){
+ const note=norm(value),box=$('#moveNoteSummary');if(!box)return;const rows=cache.byNote.get(note)||[];
+ if(!rows.length){box.innerHTML=note?'<p class="status danger">Nota não localizada.</p>':'';return}
+ const n=noteSummary(note,rows),movable=rows.filter(r=>!r.releasedAt);
+ box.innerHTML=`<div class="kpi-grid">${kpi('AWBs',n.total)}${kpi('Recebidas',n.received)}${kpi('Triadas',n.triaged)}${kpi('Ativas',movable.length)}</div><p><b>Posição atual:</b> ${n.position||'Sem posição'} | <b>Base:</b> ${n.bases.join(' - ')||'-'} | <b>Status:</b> ${n.status}</p><div class="operation-actions"><button class="btn primary" id="confirmMoveNote" ${!movable.length?'disabled':''}>Mover / trocar posição</button></div>`;
+ if($('#confirmMoveNote'))$('#confirmMoveNote').onclick=confirmMoveNote;
+}
+async function confirmMoveNote(){
+ const note=norm($('#moveNoteSearch')?.value),toPosition=norm($('#moveNotePosition')?.value);if(!note||!toPosition){toast('Informe a Nota e a nova posição.','error');return}
+ const rows=cache.byNote.get(note)||[];if(!rows.length){toast('Nota não localizada.','error');return}
+ const movable=rows.filter(r=>!r.releasedAt);if(!movable.length){toast('A Nota já foi retirada.','error');return}
+ const n=noteSummary(note,rows),fromPosition=n.position||'';
+ if(norm(fromPosition)===toPosition){toast('A Nota já está nessa posição.','error');return}
+ const occupied=allNotes().filter(x=>x.status!=='Retirada'&&norm(x.position)===toPosition&&norm(x.note)!==note);
+ if(occupied.length&&!confirm(`A posição ${toPosition} já está ocupada por ${occupied.map(x=>x.note).join(', ')}.\n\nDeseja ACRESCENTAR a Nota ${n.note} nessa posição?`))return;
+ if(!state.positions.some(p=>norm(p.code)===toPosition))state.positions.push({code:toPosition,active:true,createdAt:new Date().toISOString(),createdBy:session.operator});
+ movable.forEach(r=>{r.position=toPosition;r.originalPosition=r.originalPosition||fromPosition;r.movedAt=new Date().toISOString();r.movedBy=session.operator;r.movedUser=session.user.username});
+ log('MOVIMENTOU_NOTA',{note:n.note,fromPosition,toPosition,quantity:movable.length,occupied:occupied.map(x=>x.note)},'assistant');
+ await saveState(true);closeModal();toast(`Nota ${n.note} movida de ${fromPosition||'sem posição'} para ${toPosition}.`,'ok');renderAssistant();
+}
+
 async function generateRelease(note){const code=Math.random().toString(36).slice(2,10).toUpperCase();const rel={id:crypto.randomUUID(),note,code,createdAt:new Date().toISOString(),createdBy:session.operator,expiresAt:new Date(Date.now()+20*60*1000).toISOString()};state.releases.push(rel);log('GEROU_CODIGO_LIBERACAO',{note,code,expiresAt:rel.expiresAt},'assistant');await saveState(true);$('#qrArea').innerHTML=`<div id="qr"></div><h2>${code}</h2><small>Válido por 20 minutos</small>`;if(window.QRCode)new QRCode($('#qr'),{text:code,width:180,height:180});toast('Código de liberação gerado.','ok')}
 
 
@@ -674,10 +823,16 @@ async function clearWholeSystemFromPanel(){
  }
 }
 
+function renderActionHistoryPage(){
+ const rows=state.logs.slice(0,5000).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));
+ $('#content').innerHTML=head('Histórico de Ações','Somente ações importantes. Login, abertura de tela e bipagens normais não são arquivados.','<button class="btn danger" id="clearActionHistoryPage">Excluir histórico</button>')+`<div class="panel"><div class="panel-head"><h3>Relação de ações</h3><span>${rows.length.toLocaleString('pt-BR')} registro(s)</span></div>${table([{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Login',key:'username'},{label:'Classificação',key:'role'},{label:'Módulo',key:'moduleName'},{label:'Ação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}],rows,'actionHistoryTable')}</div>`;
+ $('#clearActionHistoryPage').onclick=async()=>{if(!state.logs.length){toast('O histórico já está vazio.');return}if(!confirm('Excluir todo o Histórico de Ações? Esta ação não poderá ser desfeita.'))return;state.logs=[];await saveState(true);toast('Histórico de ações excluído.','ok');renderActionHistoryPage()};
+}
+
 function renderLeadership(){
  const notes=allNotes(),masters=[...cache.byMaster.entries()].map(([m,r])=>masterSummary(m,r)),recs=cache.records;
  $('#content').innerHTML=head('Painel Operacional','Recebimento, triagem, complementos, posições e Bolsão',
- '<button class="btn primary" id="panelImport">Subir relação</button><button class="btn subtle" id="panelModel">Baixar modelo</button><button class="btn subtle" id="panelDownload">Baixar relação</button><button class="btn success" id="panelFinishShift">Finalizar turno</button><button class="btn danger" id="panelClearAll">Zerar todo sistema</button>')+
+ '<button class="btn primary" id="panelImport">Subir relação normal</button><button class="btn primary" id="panelPositionImport">Subir relação com posições</button><button class="btn subtle" id="panelModel">Baixar modelo</button><button class="btn subtle" id="panelDownload">Baixar relação</button><button class="btn success" id="panelFinishShift">Finalizar turno</button><button class="btn danger" id="panelClearAll">Zerar todo sistema</button>')+
  `<div class="kpi-grid">
  ${kpi('AWBs a caminho',recs.filter(r=>!r.receivedAt).length)}
  ${kpi('AWBs recebidas',recs.filter(r=>r.receivedAt).length)}
@@ -703,6 +858,8 @@ function renderLeadership(){
   ${table(TOWER_COLS,recs,'panelallTable')}
  </div>`;
  $('#panelImport').onclick=()=>$('#towerFile').click();
+ $('#panelPositionImport').onclick=()=>$('#positionFile').click();
+ $('#positionFile').onchange=e=>{const f=e.target.files[0];e.target.value='';importPositionsGeneral(f)};
  $('#panelModel').onclick=downloadTowerModel;
  $('#panelDownload').onclick=()=>excelDownload('CCPB_Relacao_Geral_Lancada.xlsx',recs.map(exportRecord));
  $('#panelFinishShift').onclick=archiveShift;
@@ -797,18 +954,18 @@ function renderBolsaoRelation(){
  })))
 }
 
-function renderHistory(){const rows=state.logs.slice(0,5000).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));const cols=[{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Login',key:'username'},{label:'Classificação',key:'role'},{label:'Módulo',key:'moduleName'},{label:'Movimentação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}];$('#content').innerHTML=head('Histórico de Movimentações','Registro de login, importações, recebimentos, bipagens, posições, liberações e turnos',has('history.download')?'<button class="btn subtle" id="historyDownload">Baixar histórico</button>':'')+`<div class="panel">${filterBar(cols,'hist')}${table(cols,rows,'histTable')}</div>`;bindColumnFilters('hist',cols,rows,5000);if($('#historyDownload'))$('#historyDownload').onclick=()=>excelDownload('CCPB_Historico.xlsx',rows.map(r=>({Data:r.date,Hora:r.time,Operador:r.operator,Login:r.username,Classificação:r.role,Módulo:r.moduleName,Movimentação:r.actionName,Dispositivo:r.device,Detalhes:r.detailText})))}
+function renderHistory(){const rows=state.logs.slice(0,5000).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));const cols=[{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Login',key:'username'},{label:'Classificação',key:'role'},{label:'Módulo',key:'moduleName'},{label:'Movimentação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}];$('#content').innerHTML=head('Histórico de Ações','Somente movimentações e ações operacionais importantes',has('history.download')?'<button class="btn subtle" id="historyDownload">Baixar histórico</button>':'')+`<div class="panel">${filterBar(cols,'hist')}${table(cols,rows,'histTable')}</div>`;bindColumnFilters('hist',cols,rows,5000);if($('#historyDownload'))$('#historyDownload').onclick=()=>excelDownload('CCPB_Historico.xlsx',rows.map(r=>({Data:r.date,Hora:r.time,Operador:r.operator,Login:r.username,Classificação:r.role,Módulo:r.moduleName,Movimentação:r.actionName,Dispositivo:r.device,Detalhes:r.detailText})))}
 
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
 function renderAdmin(){
   if(session.user.role!=='admin'&&!has('view.admin'))return;
-  $('#content').innerHTML=head('Administração do Sistema','Somente configurações, usuários, permissões e auditoria')+`<div class="admin-tabs"><button data-tab="users" class="active">Usuários</button><button data-tab="permissions">Catálogo de permissões</button><button data-tab="sectors">Configuração dos setores</button><button data-tab="positions">Posições</button><button data-tab="history">Histórico geral</button><button data-tab="firebase">Supabase / Aplicativo</button><button data-tab="clear">Limpeza total</button></div><div id="adminBody"></div>`;
+  $('#content').innerHTML=head('Administração do Sistema','Somente configurações, usuários, permissões e auditoria')+`<div class="admin-tabs"><button data-tab="users" class="active">Usuários</button><button data-tab="permissions">Catálogo de permissões</button><button data-tab="sectors">Configuração dos setores</button><button data-tab="positions">Posições</button><button data-tab="positionImport">Subir relação + posições</button><button data-tab="history">Histórico de ações</button><button data-tab="firebase">Supabase / Aplicativo</button><button data-tab="clear">Limpeza total</button></div><div id="adminBody"></div>`;
   $$('.admin-tabs button').forEach(b=>b.onclick=()=>{$$('.admin-tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderAdminTab(b.dataset.tab)});
   renderAdminTab('users');
 }
 
-function renderAdminTab(tab){if(tab==='users')adminUsers();if(tab==='permissions')adminPermissions();if(tab==='sectors')adminSectors();if(tab==='positions')adminPositions();if(tab==='history')adminHistory();if(tab==='firebase')adminFirebase();if(tab==='clear')adminClear()}
+function renderAdminTab(tab){if(tab==='users')adminUsers();if(tab==='permissions')adminPermissions();if(tab==='sectors')adminSectors();if(tab==='positions')adminPositions();if(tab==='positionImport')adminPositionImport();if(tab==='history')adminHistory();if(tab==='firebase')adminFirebase();if(tab==='clear')adminClear()}
 function adminUsers(){const rows=state.users.map(u=>({...u,roleName:roleLabel(u.role)}));$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Cadastro de usuários</h3><button class="btn primary" id="newUser">Novo usuário</button></div>${table([{label:'Usuário',key:'username'},{label:'Classificação',key:'name'},{label:'Perfil',key:'roleName'},{label:'Ativo',key:'active',render:u=>u.active?'Sim':'Não'},{label:'Exige nome',key:'requireOperator',render:u=>u.requireOperator?'Sim':'Não'},{label:'Permissões',key:'permissions',render:u=>u.permissions.length},{label:'Ações',key:'actions',render:u=>`<button class="btn subtle user-edit" data-user="${u.username}">Editar</button>`}],rows)}</div>`;$('#newUser').onclick=()=>userModal();$$('.user-edit').forEach(b=>b.onclick=()=>userModal(state.users.find(u=>u.username===b.dataset.user)))}
 function userModal(user=null){const u=user||{username:'',password:'',name:'',role:'tower',active:true,permissions:[],requireOperator:true};openModal(user?'Editar usuário':'Novo usuário',`<div class="form-grid"><label>Usuário<input id="uUser" value="${u.username}"></label><label>Senha<input id="uPass" value="${u.password}"></label><label>Nome da classificação<input id="uName" value="${u.name}"></label><label>Perfil sugerido<select id="uRole">${Object.keys(ROLE_PRESETS).map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${roleLabel(r)}</option>`).join('')}</select></label><label><input id="uActive" type="checkbox" ${u.active?'checked':''}> Usuário ativo</label><label><input id="uOperator" type="checkbox" ${u.requireOperator?'checked':''}> Exigir nome do operador</label></div><h3>Permissões individuais</h3><div class="permission-grid">${PERMISSIONS.map(p=>`<label class="check-card"><input type="checkbox" data-perm="${p}" ${u.permissions.includes(p)?'checked':''}> ${permissionLabel(p)}</label>`).join('')}</div><button id="saveUser" class="btn primary" style="margin-top:15px">Salvar usuário</button>`);$('#uRole').onchange=()=>{$$('[data-perm]').forEach(x=>x.checked=ROLE_PRESETS[$('#uRole').value].includes(x.dataset.perm))};$('#saveUser').onclick=async()=>{const username=$('#uUser').value.trim();if(!username||!$('#uPass').value){toast('Informe usuário e senha.','error');return}const obj={username,password:$('#uPass').value,name:$('#uName').value.trim()||username,role:$('#uRole').value,active:$('#uActive').checked,requireOperator:$('#uOperator').checked,permissions:$$('[data-perm]').filter(x=>x.checked).map(x=>x.dataset.perm)};const i=state.users.findIndex(x=>x.username===u.username);if(i>=0)state.users[i]=obj;else if(state.users.some(x=>x.username===username)){toast('Usuário já existe.','error');return}else state.users.push(obj);log('SALVOU_USUARIO',{username,permissions:obj.permissions.length},'admin');await saveState(true);closeModal();adminUsers();toast('Usuário salvo.','ok')}}
 function adminPermissions(){$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Catálogo geral de permissões</h3><span>${PERMISSIONS.length} opções disponíveis para qualquer usuário</span></div><div class="panel-body permission-grid">${PERMISSIONS.map(p=>`<div class="check-card"><b>${permissionLabel(p)}</b></div>`).join('')}</div></div>`}
@@ -817,7 +974,7 @@ function sectorModal(sector){const cfg=state.config.sector[sector]||{};const rel
 function adminPositions(){$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Posições cadastradas</h3><button class="btn primary" id="addPosition">Adicionar posição</button></div>${table([{label:'Código',key:'code'},{label:'Ativa',key:'active',render:p=>p.active?'Sim':'Não'},{label:'Nota atual',key:'note',render:p=>allNotes().find(n=>n.position===p.code&&n.status!=='Retirada')?.note||'Livre'},{label:'Ações',key:'actions',render:p=>`<button class="btn subtle pos-edit" data-code="${p.code}">Editar</button> <button class="btn danger pos-delete" data-code="${p.code}">Excluir</button>`}],state.positions)}</div>`;$('#addPosition').onclick=()=>positionModal();$$('.pos-edit').forEach(b=>b.onclick=()=>positionModal(state.positions.find(p=>p.code===b.dataset.code)));$$('.pos-delete').forEach(b=>b.onclick=()=>deletePosition(b.dataset.code))}
 function positionModal(p=null){openModal(p?'Editar posição':'Nova posição',`<div class="form-grid"><label>Código<input id="pCode" value="${p?.code||''}"></label><label><input id="pActive" type="checkbox" ${p?.active!==false?'checked':''}> Posição ativa</label></div><button id="savePos" class="btn primary">Salvar</button>`);$('#savePos').onclick=async()=>{const code=norm($('#pCode').value);if(!code){toast('Informe o código.','error');return}if(p)p.code=code,p.active=$('#pActive').checked;else if(state.positions.some(x=>x.code===code)){toast('Posição já existe.','error');return}else state.positions.push({code,active:$('#pActive').checked,createdAt:new Date().toISOString(),createdBy:session.operator});log('SALVOU_POSICAO',{code},'admin');await saveState(true);closeModal();adminPositions()}}
 async function deletePosition(code){const occupied=allNotes().find(n=>n.position===code&&n.status!=='Retirada');if(occupied){toast(`Posição ocupada pela Nota ${occupied.note}.`,'error');return}if(!confirm(`Excluir posição ${code}?`))return;state.positions=state.positions.filter(p=>p.code!==code);log('EXCLUIU_POSICAO',{code},'admin');await saveState(true);adminPositions()}
-function adminHistory(){const rows=state.logs.slice(0,5000).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Histórico geral</h3></div>${table([{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Login',key:'username'},{label:'Classificação',key:'role'},{label:'Módulo',key:'moduleName'},{label:'Movimentação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}],rows)}</div>`}
+function adminHistory(){const rows=state.logs.slice(0,5000).map(l=>({...l,moduleName:l.moduleName||moduleLabel(l.module),actionName:l.actionName||actionLabel(l.action),device:l.device||'Dispositivo não identificado',detailText:l.detailText||detailText(l)}));$('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Histórico de ações importantes</h3><button class="btn danger" id="clearActionHistory">Excluir histórico</button></div><div class="panel-body"><p>Somente ações relevantes são registradas. Login, abertura de tela, bipagens normais e rotinas cotidianas não entram neste histórico.</p></div>${table([{label:'Data',key:'date'},{label:'Hora',key:'time'},{label:'Operador',key:'operator'},{label:'Login',key:'username'},{label:'Classificação',key:'role'},{label:'Módulo',key:'moduleName'},{label:'Ação',key:'actionName'},{label:'Dispositivo',key:'device'},{label:'Detalhes',key:'detailText'}],rows)}</div>`;$('#clearActionHistory').onclick=async()=>{if(!state.logs.length){toast('O histórico já está vazio.');return}if(!confirm('Excluir todo o Histórico de Ações? Esta ação não poderá ser desfeita.'))return;state.logs=[];await saveState(true);toast('Histórico de ações excluído.','ok');adminHistory()}}
 function adminFirebase(){
  const f=state.config.supabase||(state.config.supabase={enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:SUPABASE_TABLE,rowId:SUPABASE_ROW_ID,lastSync:null});
  $('#adminBody').innerHTML=`<div class="panel"><div class="panel-head"><h3>Supabase / publicação no GitHub Pages</h3></div><div class="panel-body"><p>O CCPB V6 trabalha em memória no navegador e salva cada item separadamente na tabela ccpb. A cópia local permanece como contingência offline.</p><div class="form-grid"><label>Project URL<input value="${SUPABASE_URL}" readonly></label><label>Tabela<input value="${SUPABASE_TABLE}" readonly></label><label>Estrutura<input value="v12:* (registros independentes)" readonly></label><label><input id="sbEnabled" type="checkbox" ${f.enabled!==false?'checked':''}> Ativar sincronização</label></div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:15px"><button id="saveSupabase" class="btn primary">Salvar e testar</button><button id="pullSupabase" class="btn subtle">Carregar dados da nuvem</button></div><p style="margin-top:12px"><strong>Última sincronização:</strong> ${f.lastSync?new Date(f.lastSync).toLocaleString('pt-BR'):'Ainda não registrada'}</p></div></div>`;
@@ -1114,12 +1271,12 @@ async function applyRemoteEnvelope(envelope){
   if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}
   if(!fastRefreshLeadership(realtimeChangedRecords))forceVisualRefresh();
   return true;
- }catch(e){console.error('CCPB V7: falha na atualização incremental.',e);return supabasePull(true)}finally{cloudApplying=false;cloudPullInFlight=false}
+ }catch(e){console.error('CCPB V8: falha na atualização incremental.',e);return supabasePull(true)}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 async function writeCloudMeta(client,envelope){const row={id:CLOUD_META_ID,dados:envelope,atualizado_em:new Date().toISOString()};const {error}=await client.from(CLOUD_TABLE).upsert(row,{onConflict:'id'});if(error)throw error}
 async function checkRemoteStamp(){
  if(lightPollInFlight||!navigator.onLine||cloudSyncInFlight||cloudPullInFlight)return false;const client=initSupabase();if(!client)return false;lightPollInFlight=true;
- try{const {data,error}=await client.from(CLOUD_TABLE).select('dados').eq('id',CLOUD_META_ID).maybeSingle();if(error)throw error;const env=data?.dados;if(env&&env.clientId!==CLIENT_ID){const key=`${env.clientId||'remote'}:${env.revision||env.at||0}`;if(!processedSyncEnvelopes.has(key))return await applyRemoteEnvelope(env)}return true}catch(e){console.warn('CCPB V7: verificação leve indisponível.',e);return false}finally{lightPollInFlight=false}
+ try{const {data,error}=await client.from(CLOUD_TABLE).select('dados').eq('id',CLOUD_META_ID).maybeSingle();if(error)throw error;const env=data?.dados;if(env&&env.clientId!==CLIENT_ID){const key=`${env.clientId||'remote'}:${env.revision||env.at||0}`;if(!processedSyncEnvelopes.has(key))return await applyRemoteEnvelope(env)}return true}catch(e){console.warn('CCPB V8: verificação leve indisponível.',e);return false}finally{lightPollInFlight=false}
 }
 async function supabasePush(silent=false){
  if(!cloudEnabled()||!navigator.onLine)return false;const client=initSupabase();if(!client)return false;if(cloudSyncInFlight){cloudSyncQueued=true;return true}cloudSyncInFlight=true;
@@ -1132,13 +1289,13 @@ async function supabasePush(silent=false){
   }
   const envelope={clientId:CLIENT_ID,revision,reset:pendingSystemReset,changes,at:Date.now()};
   await writeCloudMeta(client,envelope);lastCloudRevision=revision;pendingSystemReset=false;pendingWrites.clear();pendingDeletes.clear();initializeLocalTracking();localChangesPending=false;lastSuccessfulPushAt=Date.now();
-  state.config=state.config||emptyState().config;state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7.1',lastSync:new Date().toISOString()};await persistLocalState();
+  state.config=state.config||emptyState().config;state.config.supabase={...(state.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v8.3',lastSync:new Date().toISOString()};await persistLocalState();
   if(pendingLiveEvents.length){const events=pendingLiveEvents.splice(0);for(const evt of events)await broadcastLiveEvent(evt)}
   if(!silent)toast(`Sincronização concluída (${changed} alteração(ões)).`,'ok');return true;
- }catch(e){localChangesPending=true;console.error('CCPB V7: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
+ }catch(e){localChangesPending=true;console.error('CCPB V8: falha ao salvar no Supabase.',e);if(!silent)toast('Falha ao sincronizar: '+(e?.message||'erro desconhecido'),'error');return false}
  finally{
   cloudSyncInFlight=false;
-  if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),900)}
+  if(cloudSyncQueued){cloudSyncQueued=false;clearTimeout(queueSupabasePush.timer);queueSupabasePush.timer=setTimeout(()=>supabasePush(true),2500)}
   else if(deferredRemoteEnvelope){const env=deferredRemoteEnvelope;deferredRemoteEnvelope=null;setTimeout(()=>applyRemoteEnvelope(env),30)}
  }
 }
@@ -1148,16 +1305,16 @@ async function supabasePull(force=false){
  try{
   await migrateLegacyIfNeeded(client);const remote=emptyState();for(const group of CLOUD_GROUPS){const rows=await fetchTable(client,group);rememberGroup(group,rows);if(CLOUD_SINGLETONS.has(group))remote[group]=rows.find(r=>r.id===cloudRowId(group,'principal'))?.dados??(group==='users'?DEFAULT_USERS:emptyState().config);else remote[group]=rows.map(r=>r.dados).filter(Boolean)}
   const {data:meta}=await client.from(CLOUD_TABLE).select('dados').eq('id',CLOUD_META_ID).maybeSingle();lastCloudRevision=Math.max(lastCloudRevision,Number(meta?.dados?.revision||0));
-  remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v7.1',lastSync:new Date().toISOString()};
+  remote.version=VERSION;remote.updatedAt=Date.now();remote.config=remote.config||emptyState().config;remote.config.supabase={...(remote.config.supabase||{}),enabled:true,url:SUPABASE_URL,key:SUPABASE_KEY,table:CLOUD_TABLE,rowId:'sincronização incremental v8.3',lastSync:new Date().toISOString()};
   cloudApplying=true;state=hadLocalChanges?mergeCloudState(state,remote):remote;cloudApplying=false;normalizeSystemUsers();rebuildCache();initializeLocalTracking();
   if(hadLocalChanges){localChangesPending=true;collectLocalChanges()}else localChangesPending=false;
   await persistLocalState();if(session?.user?.username){const u=state.users.find(x=>x.username===session.user.username&&x.active);if(u)session.user=u}if(!fastRefreshLeadership([]))refreshCurrentViewPreservingState();if(hadLocalChanges)queueSupabasePush(0);return true;
- }catch(e){console.error('CCPB V7: falha ao carregar Supabase.',e);return false}finally{cloudApplying=false;cloudPullInFlight=false}
+ }catch(e){console.error('CCPB V8: falha ao carregar Supabase.',e);return false}finally{cloudApplying=false;cloudPullInFlight=false}
 }
 function startSupabaseRealtime(){
  const client=initSupabase();if(!client||supabaseChannel||!navigator.onLine||document.visibilityState==='hidden')return;
  // O postgres_changes do meta é a fonte principal. Removido broadcast duplicado e Presence desnecessário.
- supabaseChannel=client.channel('ccpb-v7-wms-live',{config:{broadcast:{self:false}}})
+ supabaseChannel=client.channel('ccpb-v8-3-wms-live',{config:{broadcast:{self:false}}})
   .on('broadcast',{event:'ccpb-action'},({payload})=>{showLiveEvent(payload)})
   .on('postgres_changes',{event:'*',schema:'public',table:CLOUD_TABLE,filter:`id=eq.${CLOUD_META_ID}`},payload=>{const env=payload?.new?.dados;if(env?.clientId!==CLIENT_ID)scheduleRealtimePull(20,env)})
   .subscribe(status=>{
@@ -1227,8 +1384,8 @@ async function init(){
  const saved=JSON.parse(sessionStorage.getItem('ccpb_session')||'null');if(saved){const user=state.users.find(u=>u.username===saved.username&&u.active);if(user){session={user,operator:saved.operator||user.name};enterApp()}}
  setTimeout(()=>{$('#splash').classList.add('hidden');if(!session)$('#loginView').classList.remove('hidden')},500);
  // Polling é somente contingência. Com Realtime conectado não faz consultas periódicas ao meta.
- setInterval(()=>{if(!realtimeConnected&&navigator.onLine&&document.visibilityState==='visible'&&!localChangesPending&&!cloudSyncInFlight&&!cloudPullInFlight)checkRemoteStamp()},60000);
- setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&localChangesPending&&!queueSupabasePush.timer)queueSupabasePush(900)},3000);
+ setInterval(()=>{if(!realtimeConnected&&navigator.onLine&&document.visibilityState==='visible'&&!localChangesPending&&!cloudSyncInFlight&&!cloudPullInFlight)checkRemoteStamp()},180000);
+ setInterval(()=>{if(navigator.onLine&&document.visibilityState==='visible'&&localChangesPending&&!queueSupabasePush.timer)queueSupabasePush(2500)},5000);
  setInterval(()=>{if(pendingVisualRefresh&&!visualRefreshScheduled&&!visualRefreshRunning)scheduleVisualRefresh()},1200);
  setInterval(()=>{$('#shiftBadge').textContent=shiftOf()},15000);
 }
